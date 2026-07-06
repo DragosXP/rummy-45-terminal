@@ -16,7 +16,7 @@ void init_deck(Deck *deck) {
 
 				if (num == 1) {
 					deck->tiles[tile_index].points = 25;
-				} else if (num >= 10 && nume <= 13) {
+				} else if (num >= 10 && num <= 13) {
 					deck->tiles[tile_index].points = 10;
 				} else {
 					deck->tiles[tile_index].points = 5;
