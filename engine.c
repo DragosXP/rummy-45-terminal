@@ -51,3 +51,25 @@ void shuffle_deck(Deck *deck) {
 		deck->tiles[j] = temp;
 	}
 }
+
+// gives tiles to players
+void deal_hands(Deck *deck, Player *p1, Player *p2) {
+	p1->tile_count = 0;
+	p2->tile_count = 0;
+	p1->has_melded = false;
+   	p2->has_melded = false;
+
+	for (int i = 0; i < 14; i++) {
+		deck->size--;
+        	p1->hand[p1->tile_count] = deck->tiles[deck->size];
+        	p1->tile_count++;
+
+        	deck->size--;
+        	p2->hand[p2->tile_count] = deck->tiles[deck->size];
+        	p2->tile_count++;
+	}
+
+	deck->size--;
+    	p1->hand[p1->tile_count] = deck->tiles[deck->size];
+    	p1->tile_count++;
+}
