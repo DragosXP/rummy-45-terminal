@@ -1,6 +1,8 @@
 #ifndef RUMMY_H
 #define RUMMY_H
 
+#include <stdbool.h>
+
 // tile colors
 typedef enum {
 	BLACK = 0,
@@ -24,7 +26,14 @@ typedef struct {
 	int size;
 } Deck;
 
+typedef struct {
+	Tile hand[20];
+	int tile_count;
+	bool has_melded;
+} Player;
+
 void init_deck(Deck *deck);
 void shuffle_deck(Deck *deck);
+void deal_hands(Deck *deck, Player *p1, Player *p2);
 
 #endif
