@@ -42,6 +42,19 @@ typedef struct {
     bool has_melded;
 } Player;
 
+// O singură formație de pe masă (suită sau grup)
+typedef struct {
+    Tile tiles[13];   // maxim 13 piese într-o suită
+    int  count;       // câte piese se află în această formație
+} Meld;
+
+// Masa comună unde se află toate formațiile jucate
+#define MAX_MELDS 50
+typedef struct {
+    Meld melds[MAX_MELDS];
+    int  meld_count;
+} Table;
+
 // Discard pile declarations
 extern Tile discard_pile[TOTAL_TILES];
 extern int discard_count;
@@ -53,4 +66,16 @@ void deal_hands(Deck *deck, Player *p1, Player *p2);
 void draw_from_deck(Deck *deck, Player *player);
 void discard_tile(Player *player, int hand_index, Tile discard_pile[], int *discard_count);
 
-#endif
+// Validarea formațiilor (Meld validation)
+bool is_valid_group(Tile tiles[], int count);
+bool is_valid_run(Tile tiles[], int count);
+bool is_valid_meld(Tile tiles[], int count);
+
+// Operațiunile mesei (Table operations)
+void init_table(Table *table);
+bool place_meld(Table *table, Tile tiles[], int count);
+
+// Extragerea din teancul de decartare (Draw from discard pile)
+void draw_from_discard(Tile discard_pile[], int *discard_count, Player *player);
+
+#endif 

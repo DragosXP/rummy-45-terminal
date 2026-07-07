@@ -104,3 +104,172 @@ void discard_tile(Player *player, int hand_index, Tile discard_pile[], int *disc
 		player->tile_count--;
 	}
 }
+
+
+
+// ====================================================================
+// NOU: LOGICA PENTRU VALIDAREA FORMAȚIILOR (TERȚE ȘI SUITE) ȘI A MESEI
+// ====================================================================
+
+// Funcție pentru Terță (Grup: 1-1-1)
+bool is_valid_group(Tile tiles[], int count) {
+    // 1. Verificăm lungimea (între 3 și 4 piese)
+    if (count < 3 || count > 4) {
+        return false;
+    }
+
+    int target_number = -1; 
+    bool seen_color[5] = {false}; 
+    int joker_count = 0;
+    int real_tiles_count = 0;
+
+    for (int i = 0; i < count; i++) {
+        // Dacă e Joker
+        if (tiles[i].number == 0) { 
+            joker_count++;
+            if (joker_count > 1) return false; // MAXIM 1 Joker permis
+            continue;
+        }
+
+        real_tiles_count++;
+
+        // Stabilim numărul de bază
+        if (target_number == -1) {
+            target_number = tiles[i].number;
+        } else if (tiles[i].number != target_number) {
+            return false; // Numere diferite = invalid
+        }
+
+        // Verificăm să nu se repete culorile
+        if (seen_color[tiles[i].color] == true) {
+            return false; 
+        }
+        seen_color[tiles[i].color] = true;
+    }
+
+    // Regula strictă: Minim 2 piese reale
+    if (real_tiles_count < 2) {
+        return false;
+    }
+
+    return true;
+}
+
+// Helper pentru Suită: verifică dacă golurile dintre numere pot fi acoperite de Joker
+bool check_sequence_gaps(int nums[], int num_count, int jokers_available) {
+    int jokers_needed = 0;
+    for (int i = 1; i < num_count; i++) {
+        int diff = nums[i] - nums[i-1];
+        if (diff <= 0) return false; // Nu sunt permise duplicate în suită
+        jokers_needed += (diff - 1);
+    }
+    return jokers_needed <= jokers_available;
+}
+
+// Funcție pentru Suită (Run: 1-2-3-...)
+bool is_valid_run(Tile tiles[], int count) {
+    // 1. Verificăm lungimea (între 3 și 14 piese, pentru a permite și acel 1 de la final)
+    if (count < 3 || count > 14) {
+        return false;
+    }
+
+    int joker_count = 0;
+    int real_tiles_count = 0;
+    Color target_color = JOKER_COLOR;
+    int nums[14]; // Stocăm numerele reale pentru a le sorta
+
+    // 2. Extragem datele și verificăm culoarea
+    for (int i = 0; i < count; i++) {
+        if (tiles[i].number == 0) {
+            joker_count++;
+            if (joker_count > 1) return false; // MAXIM 1 Joker permis
+            continue;
+        }
+        
+        if (target_color == JOKER_COLOR) {
+            target_color = tiles[i].color; // Setăm culoarea suitei
+        } else if (tiles[i].color != target_color) {
+            return false; // Culoare diferită = invalid
+        }
+        
+        nums[real_tiles_count] = tiles[i].number;
+        real_tiles_count++;
+    }
+
+    // Regula strictă: Minim 2 piese reale
+    if (real_tiles_count < 2) return false;
+
+    // 3. Sortăm piesele reale crescător (Bubble Sort)
+    for (int i = 0; i < real_tiles_count - 1; i++) {
+        for (int j = 0; j < real_tiles_count - i - 1; j++) {
+            if (nums[j] > nums[j+1]) {
+                int temp = nums[j];
+                nums[j] = nums[j+1];
+                nums[j+1] = temp;
+            }
+        }
+    }
+
+    // 4. Verificăm secvența standard (ex: 7-8-9)
+    bool valid = check_sequence_gaps(nums, real_tiles_count, joker_count);
+    
+    // 5. Tratăm cazul special în care avem "1" și el ar putea sta după "13"
+    if (!valid && nums[0] == 1) {
+        // Transformăm temporar 1 în 14 (pentru a reprezenta piesa de după 13)
+        nums[0] = 14;
+        
+        // Resortăm array-ul
+        for (int i = 0; i < real_tiles_count - 1; i++) {
+            for (int j = 0; j < real_tiles_count - i - 1; j++) {
+                if (nums[j] > nums[j+1]) {
+                    int temp = nums[j];
+                    nums[j] = nums[j+1];
+                    nums[j+1] = temp;
+                }
+            }
+        }
+        
+        // Reverificăm secvența
+        valid = check_sequence_gaps(nums, real_tiles_count, joker_count);
+        
+        // Asigurăm regula "13-1 și gata" (nu dăm voie să continue cu un 2 fals - adică 15)
+        if (valid && nums[real_tiles_count - 1] > 14) {
+            valid = false;
+        }
+    }
+
+    return valid;
+}
+
+// Funcție principală: acceptă formația dacă e fie Terță, fie Suită
+bool is_valid_meld(Tile tiles[], int count) {
+    return is_valid_group(tiles, count) || is_valid_run(tiles, count);
+}
+
+// Inițializează masa de joc goală
+void init_table(Table *table) {
+    table->meld_count = 0;
+}
+
+// Pune o formație pe masă (dacă este validă)
+bool place_meld(Table *table, Tile tiles[], int count) {
+    if (!is_valid_meld(tiles, count)) return false;
+    if (table->meld_count >= MAX_MELDS) return false;
+
+    Meld *m = &table->melds[table->meld_count];
+    for (int i = 0; i < count; i++) {
+        m->tiles[i] = tiles[i];
+    }
+    m->count = count;
+    table->meld_count++;
+    return true;
+}
+
+// Trage o carte din teancul de piese decartate
+void draw_from_discard(Tile discard_pile[], int *discard_count, Player *player) {
+    if (*discard_count > 0 && player->tile_count < 20) {
+        (*discard_count)--;
+        player->hand[player->tile_count] = discard_pile[*discard_count];
+        player->tile_count++;
+    }
+}
