@@ -79,3 +79,19 @@ bool place_meld(Table *table, Tile tiles[], int count);
 void draw_from_discard(Tile discard_pile[], int *discard_count, Player *player);
 
 #endif 
+
+
+// Calcularea punctelor din mână (Scoring)
+int calculate_hand_points(Player *player);
+
+// Verificarea etalării inițiale (piesele trebuie să aibă >= 45 puncte)
+bool check_initial_meld(Tile tiles[], int count);
+
+// Verificarea etalării inițiale pentru mai multe formații simultan
+bool check_initial_melds(Meld staged[], int meld_count);
+
+// Condiția de victorie
+bool has_player_won(Player *player);
+
+// Eliminarea pieselor specifice din mâna jucătorului (când le pune pe masă)
+void remove_tiles_from_hand(Player *player, int indices[], int num_indices);
