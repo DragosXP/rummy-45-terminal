@@ -8,6 +8,10 @@
 Tile boards[2][2][15];
 bool selected_tiles[2][2][15];
 Tile atuu_tile;
+int player_count = 2; // Default to 2 players (renders 11 piles)
+int deck_pile_sizes[20];
+bool meld_selection_mode = false;
+bool cursor_on_board_during_draw = false;
 
 void init_game_ui() {
     setenv("TERM", "xterm-256color", 1);
@@ -27,7 +31,15 @@ void init_game_ui() {
     init_pair(6, 15, -1);   // Default/Borders -> Pure White
     init_pair(7, 46, -1);   // Highlight Cursor -> Neon Green
     init_pair(8, 51, -1);   // Staging Row 1 -> Cyan
-    init_pair(9, 201, -1);  // Staging Row 2 / Selected -> Magenta
+    if (can_change_color()) {
+        init_color(12, 502, 0, 502); // Purple: (128, 0, 128) -> (502, 0, 502)
+        init_pair(9, 12, -1);
+    } else {
+        init_pair(9, 5, -1); // Fallback to ANSI Magenta/Purple
+    }
+    init_pair(10, 201, -1); // Selected -> Pink/Magenta
+    init_pair(11, 208, -1); // Dotted Tile Border -> Orange
+    init_pair(12, 226, -1); // Yellow Selector
 
     keypad(stdscr, TRUE);
 }
@@ -70,14 +82,14 @@ void init_boards_from_players(Player *p1, Player *p2) {
     }
 
     for (int i = 0; i < p1->tile_count; i++) {
-        int r = i / 15;
-        int c = i % 15;
+        int r = (i < 7) ? 0 : 1;
+        int c = (i < 7) ? i : (i - 7);
         boards[0][r][c] = p1->hand[i];
     }
 
     for (int i = 0; i < p2->tile_count; i++) {
-        int r = i / 15;
-        int c = i % 15;
+        int r = (i < 7) ? 0 : 1;
+        int c = (i < 7) ? i : (i - 7);
         boards[1][r][c] = p2->hand[i];
     }
 }
@@ -97,23 +109,39 @@ void draw_header(Player *p1, Player *p2, int current_player, GameState state) {
     // Gabriela0 (Player 1)
     if (current_player == 0) {
         attron(COLOR_PAIR(7) | A_BOLD);
-        mvprintw(0, 26, ">> %d Gabriela0 (950 p)", count1);
+        if (count1 <= 3) {
+            mvprintw(0, 26, ">> %d Gabriela0 (950 p)", count1);
+        } else {
+            mvprintw(0, 26, ">> Gabriela0 (950 p)");
+        }
         attroff(COLOR_PAIR(7) | A_BOLD);
     } else {
-        mvprintw(0, 26, "%d Gabriela0 (950 p)", count1);
+        if (count1 <= 3) {
+            mvprintw(0, 26, "%d Gabriela0 (950 p)", count1);
+        } else {
+            mvprintw(0, 26, "Gabriela0 (950 p)");
+        }
     }
 
     // KasaneTeto (Player 2)
     if (current_player == 1) {
         attron(COLOR_PAIR(7) | A_BOLD);
-        mvprintw(0, 56, ">> %d KasaneTeto (-100 p)", count2);
+        if (count2 <= 3) {
+            mvprintw(0, 56, ">> %d KasaneTeto (-100 p)", count2);
+        } else {
+            mvprintw(0, 56, ">> KasaneTeto (-100 p)");
+        }
         attroff(COLOR_PAIR(7) | A_BOLD);
     } else {
-        mvprintw(0, 56, "%d KasaneTeto (-100 p)", count2);
+        if (count2 <= 3) {
+            mvprintw(0, 56, "%d KasaneTeto (-100 p)", count2);
+        } else {
+            mvprintw(0, 56, "KasaneTeto (-100 p)");
+        }
     }
 
     // Static Messi player
-    mvprintw(0, 86, "14 Messi (1200 p)");
+    mvprintw(0, 86, "Messi (1200 p)");
 }
 
 // Renders the shared table (all played melds) at rows 1-13
@@ -205,11 +233,16 @@ void draw_discard_pile(int cursor_index, int view_start, bool is_selecting_disca
         mvprintw(r, 0, "                                                                                                      ");
     }
 
+    int limit = discard_count;
+    if (is_selecting_discard && cursor_index == discard_count) {
+        limit = discard_count + 1;
+    }
+
     attron(COLOR_PAIR(6));
     if (view_start > 0) {
         mvprintw(15, 2, "<");
     }
-    if (view_start + 22 < discard_count) {
+    if (view_start + 22 < limit) {
         mvprintw(15, 98, ">");
     }
     attroff(COLOR_PAIR(6));
@@ -217,13 +250,23 @@ void draw_discard_pile(int cursor_index, int view_start, bool is_selecting_disca
     int visible_count = 22;
     for (int i = 0; i < visible_count; i++) {
         int idx = view_start + i;
-        if (idx >= discard_count) break;
+        if (idx >= limit) break;
 
         int col = 5 + i * 4;
         bool is_cursor = (is_selecting_discard && idx == cursor_index);
+        int border_pair = is_cursor ? 7 : 6;
+
+        if (idx == discard_count) {
+            // Draw ghost tile placeholder for discarding
+            attron(COLOR_PAIR(border_pair));
+            mvprintw(14, col, "┌──┐");
+            mvprintw(15, col, "│  │");
+            mvprintw(16, col, "└──┘");
+            attroff(COLOR_PAIR(border_pair));
+            continue;
+        }
 
         Tile tile = discard_pile[idx];
-        int border_pair = is_cursor ? 7 : 6;
         int color_pair = (tile.number == 0) ? 5 : tile.color + 1;
 
         attron(COLOR_PAIR(border_pair));
@@ -245,74 +288,89 @@ void draw_discard_pile(int cursor_index, int view_start, bool is_selecting_disca
 
 // Renders the deck piles and trump card (atuu) at rows 17-24
 void draw_deck_piles(int deck_size, bool is_deck_selected) {
-    // Clear rows 17-24
-    for (int r = 17; r <= 24; r++) {
+    // Clear rows 17-25
+    for (int r = 17; r <= 25; r++) {
         mvprintw(r, 0, "                                                                                                      ");
     }
 
-    // Determine pile sizes based on deck size remaining
-    int pile_sizes[5] = {0};
-    int remaining = deck_size;
-    for (int i = 0; i < 5; i++) {
-        pile_sizes[i] = remaining / (5 - i);
-        remaining -= pile_sizes[i];
+    int num_piles = 15 - 2 * player_count;
+    if (num_piles < 1) num_piles = 1;
+    if (num_piles > 20) num_piles = 20;
+
+    int active_pile_idx = -1;
+    for (int i = 0; i < num_piles; i++) {
+        if (deck_pile_sizes[i] > 0) {
+            active_pile_idx = i;
+            break;
+        }
     }
 
-    // Render 5 piles
-    for (int col_idx = 0; col_idx < 5; col_idx++) {
+    int last_active_idx = -1;
+    for (int i = num_piles - 1; i >= 0; i--) {
+        if (deck_pile_sizes[i] > 0) {
+            last_active_idx = i;
+            break;
+        }
+    }
+
+    // Render piles
+    for (int col_idx = 0; col_idx < num_piles; col_idx++) {
         int col = 5 + col_idx * 4;
-        int size = pile_sizes[col_idx];
+        int size = deck_pile_sizes[col_idx];
+
         if (size <= 0) continue;
 
+        bool is_highlighted = (is_deck_selected && col_idx == active_pile_idx);
+
         // Height levels representing card pile thickness
-        int height = 7;
-        if (size <= 1) height = 1;
-        else if (size <= 3) height = 2;
-        else if (size <= 5) height = 3;
-        else if (size <= 8) height = 4;
-        else if (size <= 11) height = 5;
-        else if (size <= 14) height = 6;
+        int height = size;
+        if (height > 7) height = 7;
 
-        attron(COLOR_PAIR(6));
-        mvprintw(17, col, "┌──┐");
-        attroff(COLOR_PAIR(6));
+        // Bottom border is part of the top card ONLY if height is 1
+        int bottom_border_pair = (is_highlighted && height <= 1) ? 7 : 6;
+        attron(COLOR_PAIR(bottom_border_pair));
+        mvprintw(25, col, "└──┘");
+        attroff(COLOR_PAIR(bottom_border_pair));
 
-        // Center card row (trump is at the top of pile 5, others face down)
-        if (col_idx == 4) {
+        int top_y = 25 - height - 1;
+        int body_y = 25 - height;
+
+        int top_border_pair = is_highlighted ? 7 : 6;
+        attron(COLOR_PAIR(top_border_pair));
+        mvprintw(top_y, col, "┌──┐");
+        attroff(COLOR_PAIR(top_border_pair));
+
+        // Center card row (trump is at the top of the last active pile, others face down)
+        int body_border_pair = is_highlighted ? 7 : 6;
+        if (col_idx == last_active_idx) {
             // Last column contains the trump card (atuu_tile)
             int cp = (atuu_tile.number == 0) ? 5 : atuu_tile.color + 1;
-            attron(COLOR_PAIR(6));
-            mvprintw(18, col, "│");
-            attroff(COLOR_PAIR(6));
+            attron(COLOR_PAIR(body_border_pair));
+            mvprintw(body_y, col, "│");
+            attroff(COLOR_PAIR(body_border_pair));
 
             attron(COLOR_PAIR(cp) | A_BOLD);
             if (atuu_tile.number == 0) printw(":)");
             else printw("%2d", atuu_tile.number);
             attroff(COLOR_PAIR(cp) | A_BOLD);
 
-            attron(COLOR_PAIR(6));
+            attron(COLOR_PAIR(body_border_pair));
             printw("│");
-            attroff(COLOR_PAIR(6));
+            attroff(COLOR_PAIR(body_border_pair));
         } else {
-            attron(COLOR_PAIR(6));
-            mvprintw(18, col, "│  │");
-            attroff(COLOR_PAIR(6));
+            attron(COLOR_PAIR(body_border_pair));
+            mvprintw(body_y, col, "│  │");
+            attroff(COLOR_PAIR(body_border_pair));
         }
 
         // Draw stacked look
-        attron(COLOR_PAIR(6));
         for (int h = 1; h < height; h++) {
-            mvprintw(18 + h, col, "├──┤");
+            // Only the divider line of stack level 1 (bottom of the top card) is highlighted
+            int stack_border_pair = (is_highlighted && h == 1) ? 7 : 6;
+            attron(COLOR_PAIR(stack_border_pair));
+            mvprintw(body_y + h, col, "├──┤");
+            attroff(COLOR_PAIR(stack_border_pair));
         }
-        mvprintw(18 + height, col, "└──┘");
-        attroff(COLOR_PAIR(6));
-    }
-
-    // Draw active selection indicator for deck
-    if (is_deck_selected) {
-        attron(COLOR_PAIR(7) | A_BOLD);
-        mvprintw(18, 1, " > ");
-        attroff(COLOR_PAIR(7) | A_BOLD);
     }
 }
 
@@ -351,7 +409,7 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
             int row_y = s + r * 5 + 1;
             Tile tile = boards[player_idx][r][c];
 
-            bool is_cursor = (r == cursor_r && c == cursor_c && state != STATE_DRAW);
+            bool is_cursor = (r == cursor_r && c == cursor_c && (state != STATE_DRAW || cursor_on_board_during_draw));
             bool is_held = (is_holding && r == held_r && c == held_c);
             bool is_selected = selected_tiles[player_idx][r][c];
 
@@ -360,9 +418,9 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
 
                 // Priority: Cursor (Green) -> Held (Cyan) -> Selected (Magenta) -> Default (White)
                 int border_pair = 6;
-                if (is_cursor) border_pair = 7;
+                if (is_cursor) border_pair = meld_selection_mode ? 12 : 7;
                 else if (is_held) border_pair = 8;
-                else if (is_selected) border_pair = 9;
+                else if (is_selected) border_pair = 10;
 
                 attron(COLOR_PAIR(border_pair));
                 mvprintw(row_y, col, "┌────┐");
@@ -382,18 +440,26 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
 
                 // Selected marker displayed cleanly inside the tile
                 if (is_selected) {
-                    attron(COLOR_PAIR(9) | A_BOLD);
+                    attron(COLOR_PAIR(10) | A_BOLD);
                     mvprintw(row_y + 2, col + 2, "▲▲");
-                    attroff(COLOR_PAIR(9) | A_BOLD);
+                    attroff(COLOR_PAIR(10) | A_BOLD);
                 }
             } else {
                 if (is_cursor) {
-                    attron(COLOR_PAIR(7));
+                    int cursor_pair = meld_selection_mode ? 12 : 7;
+                    attron(COLOR_PAIR(cursor_pair));
                     mvprintw(row_y, col, "┌────┐");
                     mvprintw(row_y + 1, col, "│    │");
                     mvprintw(row_y + 2, col, "│    │");
                     mvprintw(row_y + 3, col, "└────┘");
-                    attroff(COLOR_PAIR(7));
+                    attroff(COLOR_PAIR(cursor_pair));
+                } else if (c == 14) {
+                    attron(COLOR_PAIR(11));
+                    mvprintw(row_y, col, "┌╌╌╌╌┐");
+                    mvprintw(row_y + 1, col, "╎    ╎");
+                    mvprintw(row_y + 2, col, "╎    ╎");
+                    mvprintw(row_y + 3, col, "└╌╌╌╌┘");
+                    attroff(COLOR_PAIR(11));
                 }
             }
         }
@@ -465,11 +531,22 @@ int main() {
 
     init_boards_from_players(&p1, &p2);
 
+    // Initialize deck pile sizes
+    {
+        int num_piles = 15 - 2 * player_count;
+        int rem = deck.size;
+        for (int i = 0; i < num_piles; i++) {
+            deck_pile_sizes[i] = rem / (num_piles - i);
+            rem -= deck_pile_sizes[i];
+        }
+    }
+
     int current_player = 0;
     int cursor_r = 0;
     int cursor_c = 0;
-    GameState state = STATE_DRAW;
+    GameState state = STATE_PLAY;
     int running = 1;
+    int quit_progress = 0;
 
     // Movement state
     bool is_holding = false;
@@ -480,6 +557,8 @@ int main() {
     bool selecting_discard = false;
     int discard_cursor = 0;
     int discard_view_start = 0;
+    bool select_deck = true;
+    meld_selection_mode = false;
 
     while (running) {
         Player *active = (current_player == 0) ? &p1 : &p2;
@@ -487,30 +566,90 @@ int main() {
         // Render dynamic parts
         draw_header(&p1, &p2, current_player, state);
         draw_shared_table(&table);
-        draw_discard_pile(discard_cursor, discard_view_start, selecting_discard);
-        draw_deck_piles(deck.size, (state == STATE_DRAW && !selecting_discard));
+        int disp_cursor = selecting_discard ? discard_cursor : 
+                          ((state == STATE_PLAY && cursor_r == -1) ? discard_count : (discard_count - 1));
+        int disp_view = selecting_discard ? discard_view_start : 
+                        ((state == STATE_PLAY && cursor_r == -1) ? 
+                         ((discard_count + 1 - 22 < 0) ? 0 : (discard_count + 1 - 22)) : 
+                         ((discard_count - 22 < 0) ? 0 : (discard_count - 22)));
+        bool disp_select = selecting_discard || (state == STATE_DRAW && !select_deck && !cursor_on_board_during_draw) || (state == STATE_PLAY && cursor_r == -1);
+        draw_discard_pile(disp_cursor, disp_view, disp_select);
+        draw_deck_piles(deck.size, (state == STATE_DRAW && !selecting_discard && select_deck && !cursor_on_board_during_draw));
         draw_board(current_player, cursor_r, cursor_c, is_holding, held_r, held_c, state);
 
-        // Prompt line (Row 25)
-        mvprintw(25, 0, "   └──┘└──┘└──┘└──┘└──┘ ");
+        // Prompt line (Row 37) with Phase Indicator
+        mvprintw(37, 0, "                                                                                                      ");
+        move(37, 5);
         if (state == STATE_DRAW) {
+            attron(COLOR_PAIR(7) | A_BOLD);
+            printw("[FAZA: TRAGERE CARTE] ");
+            attroff(COLOR_PAIR(7) | A_BOLD);
             if (selecting_discard) {
-                printw(">> [STÂNGA/DREAPTA] Alege cartea | [ENTER] Trage | [Q] Înapoi << ");
+                printw(">> [STÂNGA/DREAPTA] Alege cartea | [Z] Trage | [X] Înapoi << ");
             } else {
-                printw(">> [D] Trage din pachet | [P] Alege din decartate | [Q] Ieși << ");
+                printw(">> [SUS/JOS] Alege sursa | [Z] Confirmă | [Scrie quit] Ieși << ");
             }
         } else if (state == STATE_PLAY) {
-            printw(">> [SĂGEȚI] Navigare | [SPACE] Selectează | [ENTER] Mută | [M] Joacă | [S] Discard | [Q] Ieși << ");
+            attron(COLOR_PAIR(7) | A_BOLD);
+            printw("[FAZA: JUCARE & DECARTARE] ");
+            attroff(COLOR_PAIR(7) | A_BOLD);
+            if (meld_selection_mode) {
+                printw(">> [SĂGEȚI] Navigare | [Z] Selectează | [X] Trimite Formație | [C] Mod Mișcare | [Scrie quit] Ieși << ");
+            } else {
+                if (is_holding) {
+                    if (cursor_r == -1) {
+                        printw(">> [Z] Confirmă Decartarea | [X] Renunță | [JOS] Înapoi pe tablă << ");
+                    } else {
+                        printw(">> [SĂGEȚI] Mută | [Z] Plasează | [X] Renunță | [SUS] Decartează (din rândul 0) << ");
+                    }
+                } else {
+                    printw(">> [SĂGEȚI] Navigare | [Z] Apucă piesa | [C] Mod Formații | [Scrie quit] Ieși << ");
+                }
+            }
         } else if (state == STATE_DISCARD) {
-            printw(">> [SĂGEȚI] Alege piesa | [ENTER] Decartează și termină tura | [Q] Ieși << ");
+            attron(COLOR_PAIR(7) | A_BOLD);
+            printw("[FAZA: DECARTARE] ");
+            attroff(COLOR_PAIR(7) | A_BOLD);
+            printw(">> [SĂGEȚI] Alege piesa | [Z] Decartează și termină tura | [Scrie quit] Ieși << ");
+        }
+
+        // Persistent Legend (Row 39)
+        attron(COLOR_PAIR(6) | A_BOLD);
+        mvprintw(39, 5, "LEGENDA PERMANENTĂ:  [SĂGEȚI] Navigare   |   [Z] Acțiune (Selectare/Trage/Mută)   |   [X] Renunță/Decartează   |   [C] Mod Formații");
+        attroff(COLOR_PAIR(6) | A_BOLD);
+
+        // Draw quit progress banner or empty spacing on Row 38
+        mvprintw(38, 0, "                                                                                                      ");
+        if (quit_progress > 0) {
+            char progress_str[5] = "";
+            if (quit_progress == 1) strcpy(progress_str, "q");
+            else if (quit_progress == 2) strcpy(progress_str, "qu");
+            else if (quit_progress == 3) strcpy(progress_str, "qui");
+            mvprintw(38, 5, "Ieșire: %s...", progress_str);
         }
 
         refresh();
         int ch = getch();
 
         if (ch == 'q' || ch == 'Q') {
-            running = 0;
-        } else if (state == STATE_DRAW) {
+            quit_progress = 1;
+        } else if (ch == 'u' || ch == 'U') {
+            if (quit_progress == 1) quit_progress = 2;
+            else quit_progress = 0;
+        } else if (ch == 'i' || ch == 'I') {
+            if (quit_progress == 2) quit_progress = 3;
+            else quit_progress = 0;
+        } else if (ch == 't' || ch == 'T') {
+            if (quit_progress == 3) {
+                running = 0;
+            } else {
+                quit_progress = 0;
+            }
+        } else {
+            quit_progress = 0;
+        }
+
+        if (state == STATE_DRAW) {
             if (selecting_discard) {
                 if (ch == KEY_LEFT) {
                     if (discard_cursor > 0) {
@@ -526,92 +665,327 @@ int main() {
                             discard_view_start = discard_cursor - 21;
                         }
                     }
-                } else if (ch == '\n' || ch == KEY_ENTER) {
+                } else if (ch == 'z' || ch == 'Z') {
                     // Draw selected card and all cards to the right of it
+                    int drawn_ids[100];
+                    int drawn_num = 0;
                     for (int i = discard_cursor; i < discard_count; i++) {
+                        if (drawn_num < 100) {
+                            drawn_ids[drawn_num++] = discard_pile[i].id;
+                        }
                         add_tile_to_board(current_player, discard_pile[i]);
                     }
                     discard_count = discard_cursor;
                     sync_board_to_player(current_player, active);
                     selecting_discard = false;
                     state = STATE_PLAY;
-                } else if (ch == 27 || ch == 'b' || ch == 'B') { // ESC or B to back out
+
+                    // Focus the selector on the first drawn card
+                    int first_r = -1, first_c = -1;
+                    for (int i = 0; i < drawn_num; i++) {
+                        for (int r = 0; r < 2; r++) {
+                            for (int c = 0; c < 15; c++) {
+                                if (boards[current_player][r][c].id == drawn_ids[i]) {
+                                    if (first_r == -1) {
+                                        first_r = r;
+                                        first_c = c;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (first_r != -1) {
+                        cursor_r = first_r;
+                        cursor_c = first_c;
+                    }
+                } else if (ch == 'x' || ch == 'X') {
                     selecting_discard = false;
                 }
-            } else {
-                if (ch == 'd' || ch == 'D') {
-                    int prev = active->tile_count;
-                    draw_from_deck(&deck, active);
-                    if (active->tile_count > prev) {
-                        add_tile_to_board(current_player, active->hand[active->tile_count - 1]);
-                        sync_board_to_player(current_player, active);
+            } else if (cursor_on_board_during_draw) {
+                if (ch == KEY_LEFT) {
+                    if (cursor_c > 0) cursor_c--;
+                    else cursor_c = 14;
+                } else if (ch == KEY_RIGHT) {
+                    if (cursor_c < 14) cursor_c++;
+                    else cursor_c = 0;
+                } else if (ch == KEY_UP) {
+                    if (cursor_r == 1) {
+                        cursor_r = 0;
+                    } else if (cursor_r == 0) {
+                        if (!is_holding) {
+                            cursor_on_board_during_draw = false;
+                            select_deck = true;
+                        }
                     }
-                    state = STATE_PLAY;
-                } else if (ch == 'p' || ch == 'P') {
+                } else if (ch == KEY_DOWN) {
+                    if (cursor_r == 0) {
+                        cursor_r = 1;
+                    }
+                } else if (ch == 'z' || ch == 'Z') {
+                    if (meld_selection_mode) {
+                        if (boards[current_player][cursor_r][cursor_c].id == -1) {
+                            for (int r = 0; r < 2; r++) {
+                                for (int c = 0; c < 15; c++) {
+                                    selected_tiles[current_player][r][c] = false;
+                                }
+                            }
+                        } else {
+                            selected_tiles[current_player][cursor_r][cursor_c] = !selected_tiles[current_player][cursor_r][cursor_c];
+                        }
+                    } else {
+                        if (!is_holding) {
+                            if (boards[current_player][cursor_r][cursor_c].id != -1) {
+                                is_holding = true;
+                                held_r = cursor_r;
+                                held_c = cursor_c;
+                            }
+                        } else {
+                            Tile temp = boards[current_player][cursor_r][cursor_c];
+                            boards[current_player][cursor_r][cursor_c] = boards[current_player][held_r][held_c];
+                            boards[current_player][held_r][held_c] = temp;
+
+                            bool temp_sel = selected_tiles[current_player][cursor_r][cursor_c];
+                            selected_tiles[current_player][cursor_r][cursor_c] = selected_tiles[current_player][held_r][held_c];
+                            selected_tiles[current_player][held_r][held_c] = temp_sel;
+
+                            is_holding = false;
+                            held_r = -1;
+                            held_c = -1;
+                            sync_board_to_player(current_player, active);
+                        }
+                    }
+                } else if (ch == 'x' || ch == 'X') {
+                    if (meld_selection_mode) {
+                        mvprintw(38, 5, "Trebuie să tragi o carte mai întâi!");
+                        refresh();
+                        napms(1500);
+                        mvprintw(38, 5, "                                   ");
+                    } else {
+                        if (is_holding) {
+                            is_holding = false;
+                            held_r = -1;
+                            held_c = -1;
+                        }
+                    }
+                } else if (ch == 'c' || ch == 'C') {
+                    meld_selection_mode = !meld_selection_mode;
+                    is_holding = false;
+                    held_r = -1;
+                    held_c = -1;
+                    for (int r = 0; r < 2; r++) {
+                        for (int c = 0; c < 15; c++) {
+                            selected_tiles[current_player][r][c] = false;
+                        }
+                    }
+                }
+            } else {
+                if (ch == KEY_UP) {
                     if (discard_count > 0) {
-                        selecting_discard = true;
-                        discard_cursor = discard_count - 1;
-                        discard_view_start = discard_count - 22;
-                        if (discard_view_start < 0) discard_view_start = 0;
+                        select_deck = false;
+                    }
+                } else if (ch == KEY_DOWN) {
+                    if (select_deck) {
+                        cursor_on_board_during_draw = true;
+                        cursor_r = 0;
+                        cursor_c = 0;
+                    } else {
+                        select_deck = true;
+                    }
+                } else if (ch == 'z' || ch == 'Z') {
+                    if (select_deck) {
+                        int prev = active->tile_count;
+                        draw_from_deck(&deck, active);
+                        if (active->tile_count > prev) {
+                            int first_active = -1;
+                            int num_p = 15 - 2 * player_count;
+                            for (int i = 0; i < num_p; i++) {
+                                if (deck_pile_sizes[i] > 0) {
+                                    first_active = i;
+                                    break;
+                                }
+                            }
+                            if (first_active != -1) {
+                                deck_pile_sizes[first_active]--;
+                                if (deck_pile_sizes[first_active] == 0) {
+                                    // Shift remaining piles left
+                                    for (int j = first_active; j < num_p - 1; j++) {
+                                        deck_pile_sizes[j] = deck_pile_sizes[j + 1];
+                                    }
+                                    deck_pile_sizes[num_p - 1] = 0;
+                                }
+                            }
+                            Tile drawn_card = active->hand[active->tile_count - 1];
+                            add_tile_to_board(current_player, drawn_card);
+                            sync_board_to_player(current_player, active);
+
+                            // Focus the selector on the newly drawn card
+                            for (int r = 0; r < 2; r++) {
+                                for (int c = 0; c < 15; c++) {
+                                    if (boards[current_player][r][c].id == drawn_card.id) {
+                                        cursor_r = r;
+                                        cursor_c = c;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        state = STATE_PLAY;
+                    } else {
+                        if (discard_count > 0) {
+                            selecting_discard = true;
+                            discard_cursor = discard_count - 1;
+                            discard_view_start = discard_count - 22;
+                            if (discard_view_start < 0) discard_view_start = 0;
+                        }
                     }
                 }
             }
         } else if (state == STATE_PLAY) {
-            if (ch == KEY_LEFT && cursor_c > 0) {
-                cursor_c--;
-            } else if (ch == KEY_RIGHT && cursor_c < 14) {
-                cursor_c++;
-            } else if (ch == KEY_UP && cursor_r > 0) {
-                cursor_r--;
-            } else if (ch == KEY_DOWN && cursor_r < 1) {
-                cursor_r++;
-            } else if (ch == ' ') {
-                if (boards[current_player][cursor_r][cursor_c].id != -1) {
-                    selected_tiles[current_player][cursor_r][cursor_c] = !selected_tiles[current_player][cursor_r][cursor_c];
-                }
-            } else if (ch == '\n' || ch == KEY_ENTER) {
-                if (!is_holding) {
-                    if (boards[current_player][cursor_r][cursor_c].id != -1) {
-                        is_holding = true;
-                        held_r = cursor_r;
-                        held_c = cursor_c;
+            if (meld_selection_mode) {
+                // Meld Selection Mode
+                if (ch == KEY_LEFT) {
+                    if (cursor_c > 0) cursor_c--;
+                    else cursor_c = 14;
+                } else if (ch == KEY_RIGHT) {
+                    if (cursor_c < 14) cursor_c++;
+                    else cursor_c = 0;
+                } else if (ch == KEY_UP && cursor_r > 0) {
+                    cursor_r--;
+                } else if (ch == KEY_DOWN && cursor_r < 1) {
+                    cursor_r++;
+                } else if (ch == 'z' || ch == 'Z') {
+                    // Z toggles selection of tile under cursor.
+                    // If pressed on an empty space, clear all selections.
+                    if (boards[current_player][cursor_r][cursor_c].id == -1) {
+                        for (int r = 0; r < 2; r++) {
+                            for (int c = 0; c < 15; c++) {
+                                selected_tiles[current_player][r][c] = false;
+                            }
+                        }
+                    } else {
+                        selected_tiles[current_player][cursor_r][cursor_c] = !selected_tiles[current_player][cursor_r][cursor_c];
                     }
-                } else {
-                    // Swap tiles
-                    Tile temp = boards[current_player][cursor_r][cursor_c];
-                    boards[current_player][cursor_r][cursor_c] = boards[current_player][held_r][held_c];
-                    boards[current_player][held_r][held_c] = temp;
+                } else if (ch == 'x' || ch == 'X') {
+                    // X sends/plays the meld
+                    if (play_selected_meld(current_player, active, &table)) {
+                        mvprintw(38, 5, "Formație jucată cu succes!");
+                        refresh();
+                        napms(1200);
+                        mvprintw(38, 5, "                           ");
+                    } else {
+                        mvprintw(38, 5, "Formație invalidă! Trebuie să fie suită sau terță validă (min. 3 piese).");
+                        refresh();
+                        napms(1500);
+                        mvprintw(38, 5, "                                                                        ");
+                    }
+                } else if (ch == 'c' || ch == 'C') {
+                    // C switches back to movement mode and cancels all selections
+                    meld_selection_mode = false;
+                    for (int r = 0; r < 2; r++) {
+                        for (int c = 0; c < 15; c++) {
+                            selected_tiles[current_player][r][c] = false;
+                        }
+                    }
+                }
+            } else {
+                // Movement Mode
+                if (ch == KEY_LEFT && cursor_r >= 0) {
+                    if (cursor_c > 0) cursor_c--;
+                    else cursor_c = 14;
+                } else if (ch == KEY_RIGHT && cursor_r >= 0) {
+                    if (cursor_c < 14) cursor_c++;
+                    else cursor_c = 0;
+                } else if (ch == KEY_UP) {
+                    if (cursor_r == 1) {
+                        cursor_r = 0;
+                    } else if (cursor_r == 0 && is_holding) {
+                        cursor_r = -1;
+                    }
+                } else if (ch == KEY_DOWN) {
+                    if (cursor_r == -1) {
+                        cursor_r = 0;
+                    } else if (cursor_r == 0) {
+                        cursor_r = 1;
+                    }
+                } else if (ch == 'z' || ch == 'Z') {
+                    if (cursor_r == -1) {
+                        // Discard the held card!
+                        discard_pile[discard_count++] = boards[current_player][held_r][held_c];
+                        boards[current_player][held_r][held_c].id = -1;
+                        boards[current_player][held_r][held_c].number = -1;
+                        sync_board_to_player(current_player, active);
 
-                    // Swap selection states
-                    bool temp_sel = selected_tiles[current_player][cursor_r][cursor_c];
-                    selected_tiles[current_player][cursor_r][cursor_c] = selected_tiles[current_player][held_r][held_c];
-                    selected_tiles[current_player][held_r][held_c] = temp_sel;
+                        // Check win condition
+                        if (active->tile_count == 0) {
+                            clear();
+                            mvprintw(15, 20, "FELICITĂRI! Jucătorul %d a câștigat jocul!", current_player + 1);
+                            mvprintw(17, 20, "Apasă orice tastă pentru a ieși...");
+                            refresh();
+                            getch();
+                            running = 0;
+                        } else {
+                            current_player = 1 - current_player;
+                            cursor_r = 0;
+                            cursor_c = 0;
+                            state = STATE_DRAW;
+                            select_deck = true;
+                            meld_selection_mode = false;
+                            is_holding = false;
+                            held_r = -1;
+                            held_c = -1;
+                            for (int p = 0; p < 2; p++) {
+                                for (int r = 0; r < 2; r++) {
+                                    for (int c = 0; c < 15; c++) {
+                                        selected_tiles[p][r][c] = false;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        if (!is_holding) {
+                            if (boards[current_player][cursor_r][cursor_c].id != -1) {
+                                is_holding = true;
+                                held_r = cursor_r;
+                                held_c = cursor_c;
+                            }
+                        } else {
+                            // Swap tiles
+                            Tile temp = boards[current_player][cursor_r][cursor_c];
+                            boards[current_player][cursor_r][cursor_c] = boards[current_player][held_r][held_c];
+                            boards[current_player][held_r][held_c] = temp;
 
+                            // Swap selection states
+                            bool temp_sel = selected_tiles[current_player][cursor_r][cursor_c];
+                            selected_tiles[current_player][cursor_r][cursor_c] = selected_tiles[current_player][held_r][held_c];
+                            selected_tiles[current_player][held_r][held_c] = temp_sel;
+
+                            is_holding = false;
+                            held_r = -1;
+                            held_c = -1;
+                            sync_board_to_player(current_player, active);
+                        }
+                    }
+                } else if (ch == 'x' || ch == 'X') {
+                    if (is_holding) {
+                        is_holding = false;
+                        held_r = -1;
+                        held_c = -1;
+                        if (cursor_r == -1) {
+                            cursor_r = 0;
+                        }
+                    }
+                } else if (ch == 'c' || ch == 'C') {
+                    meld_selection_mode = true;
+                    // Cancel any active hold and selections when entering meld mode
                     is_holding = false;
                     held_r = -1;
                     held_c = -1;
-                    sync_board_to_player(current_player, active);
-                }
-            } else if (ch == 'm' || ch == 'M') {
-                if (play_selected_meld(current_player, active, &table)) {
-                    mvprintw(37, 5, "Formație jucată cu succes!");
-                    refresh();
-                    napms(1200);
-                    mvprintw(37, 5, "                           ");
-                } else {
-                    mvprintw(37, 5, "Formație invalidă! Trebuie să fie suită sau terță validă (min. 3 piese).");
-                    refresh();
-                    napms(1500);
-                    mvprintw(37, 5, "                                                                        ");
-                }
-            } else if (ch == 's' || ch == 'S') {
-                // Clear selection and skip to discard
-                for (int r = 0; r < 2; r++) {
-                    for (int c = 0; c < 15; c++) {
-                        selected_tiles[current_player][r][c] = false;
+                    for (int r = 0; r < 2; r++) {
+                        for (int c = 0; c < 15; c++) {
+                            selected_tiles[current_player][r][c] = false;
+                        }
                     }
                 }
-                state = STATE_DISCARD;
             }
         } else if (state == STATE_DISCARD) {
             if (ch == KEY_LEFT && cursor_c > 0) {
@@ -622,7 +996,7 @@ int main() {
                 cursor_r--;
             } else if (ch == KEY_DOWN && cursor_r < 1) {
                 cursor_r++;
-            } else if (ch == '\n' || ch == KEY_ENTER) {
+            } else if (ch == 'z' || ch == 'Z') {
                 if (boards[current_player][cursor_r][cursor_c].id != -1) {
                     discard_tile_from_board(current_player, active, cursor_r, cursor_c);
                     
@@ -639,6 +1013,7 @@ int main() {
                         cursor_r = 0;
                         cursor_c = 0;
                         state = STATE_DRAW;
+                        select_deck = true;
                     }
                 }
             }
