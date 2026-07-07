@@ -1,106 +1,65 @@
 #include <ncurses.h>
 #include <stdlib.h>
+#include <locale.h> // ESENTIAL pentru afisarea caracterelor speciale (chenare, linii)
 
 void init_game_ui() {
+    // Activam suportul UTF-8 inainte de a porni interfata grafica
+    setlocale(LC_ALL, ""); 
+    
     initscr();
     raw();
     noecho();
     curs_set(0);
     start_color();
-
-    // 1=Rosu, 2=Albastru, 3=Galben, 4=Alb (pentru negru)
-    init_pair(1, COLOR_RED, COLOR_BLACK);
-    init_pair(2, COLOR_BLUE, COLOR_BLACK);
-    init_pair(3, COLOR_YELLOW, COLOR_BLACK);
-    init_pair(4, COLOR_WHITE, COLOR_BLACK); 
 }
 
-void draw_scores_and_top_grid() {
-    // Scorurile
-    mvprintw(0, 2, "[ Dragos: -100 ]   [ 0Gabriela0: -125 ]   [ Sandra: 60 ]   [ Fagaras: 575 ]");
-
-    // Grila mica din stanga sus
-    mvprintw(2, 2, "+----+----+----+");
-    mvprintw(3, 2, "|    |    |    |");
-    mvprintw(4, 2, "+----+----+----+");
-    mvprintw(5, 2, "|    |    |    |");
-    mvprintw(6, 2, "+----+----+----+");
-
-    attron(COLOR_PAIR(4)); mvprintw(3, 4, " 1"); attroff(COLOR_PAIR(4));
-    attron(COLOR_PAIR(1)); mvprintw(3, 9, " 1"); attroff(COLOR_PAIR(1));
-    attron(COLOR_PAIR(3)); mvprintw(3, 14, " 1"); attroff(COLOR_PAIR(3));
-
-    attron(COLOR_PAIR(2)); mvprintw(5, 4, "10"); attroff(COLOR_PAIR(2));
-    attron(COLOR_PAIR(2)); mvprintw(5, 9, "11"); attroff(COLOR_PAIR(2));
-    attron(COLOR_PAIR(3)); mvprintw(5, 14, " J"); attroff(COLOR_PAIR(3));
-}
-
-void draw_player_hand() {
-    // Mana jucatorului a fost mutata SUS, imediat sub grila mica
-    int sy = 8;
-    mvprintw(sy, 2, "+----+----+----+----+----+----+----+----+----+----+----+----+----+----+");
-    mvprintw(sy+1, 2, "|    |    |    |    |    |    |    |    |    |    |    |    |    |    |");
-    mvprintw(sy+2, 2, "+----+----+----+----+----+----+----+----+----+----+----+----+----+----+");
-
-    int hand_n[] = {3, 7, 1, 4, 13, 9, 10, 8, 1, 4, 13, 2, 9, 10};
-    int hand_c[] = {3, 3, 1, 4,  1, 1,  3, 2, 3, 3,  2, 1, 4,  4};
-
-    for (int i = 0; i < 14; i++) {
-        attron(COLOR_PAIR(hand_c[i]));
-        mvprintw(sy+1, 4 + (i * 5), "%2d", hand_n[i]);
-        attroff(COLOR_PAIR(hand_c[i]));
-    }
-}
-
-void draw_deck_and_atu() {
-    // Teancul de extragere si Atu-ul, asezate intre mana si tabla
-    int sy = 12;
-    mvprintw(sy, 2, "+----+----+----+----+----+  +----+");
-    mvprintw(sy+1, 2, "|    |    |    |    |    |  |    |");
-    mvprintw(sy+2, 2, "+----+----+----+----+----+  +----+");
-
-    // Atu-ul cu fata in sus (ex: 4 Galben)
-    attron(COLOR_PAIR(3)); mvprintw(sy+1, 31, " 4"); attroff(COLOR_PAIR(3));
-}
-
-void draw_main_board() {
-    // Tabla mare de joc a fost mutata JOS DE TOT
-    int sy = 16;
-    mvprintw(sy,   0, "+--------------------------------------------------------------------------+");
-    mvprintw(sy+1, 0, "|   +----+  +----+  +----+          +----+----+----+                       |");
-    mvprintw(sy+2, 0, "|   |    |  |    |  |    |          |    |    |    |                       |");
-    mvprintw(sy+3, 0, "+--------------------------------------------------------------------------+");
-    mvprintw(sy+4, 0, "|                                                     +----+----+          |");
-    mvprintw(sy+5, 0, "|                                                     |    |    |          |");
-    mvprintw(sy+6, 0, "+--------------------------------------------------------------------------+");
-
-    // Piesele coborate pe randul de sus al tablei
-    attron(COLOR_PAIR(2)); mvprintw(sy+2, 6, " 1"); attroff(COLOR_PAIR(2));
-    attron(COLOR_PAIR(1)); mvprintw(sy+2, 14, " 7"); attroff(COLOR_PAIR(1));
-    attron(COLOR_PAIR(4)); mvprintw(sy+2, 22, " 5"); attroff(COLOR_PAIR(4));
-
-    attron(COLOR_PAIR(3)); 
-    mvprintw(sy+2, 38, " J"); 
-    mvprintw(sy+2, 43, "12"); 
-    mvprintw(sy+2, 48, "13"); 
-    attroff(COLOR_PAIR(3));
-
-    // Piesele coborate pe randul de jos al tablei
-    attron(COLOR_PAIR(2)); 
-    mvprintw(sy+5, 56, " 9"); 
-    mvprintw(sy+5, 61, "10"); 
-    attroff(COLOR_PAIR(2));
+void draw_new_design() {
+    // Randam exact designul tau, linie cu linie
+    mvprintw(0, 0,  " <   Temmie667 (680 p) (37s left)                     0Gabriela0 (950 p)                        >");
+    mvprintw(1, 0,  "   ┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐     ┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐");
+    mvprintw(2, 0,  "   │ 1││ 2││ 3││ 4││:)││ 6││ 7││ 8││ 9││10││11│     │ 2││ 2││ 2││ 2││ 2││ 2││ 2││ 2││ 2││ 2││ 2│");
+    mvprintw(3, 0,  "   └──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘     └──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘");
+    mvprintw(4, 0,  "   ┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐");
+    mvprintw(5, 0,  "   │ 1││ 1││ 1││ 1││:)││:)│");
+    mvprintw(6, 0,  "   └──┘└──┘└──┘└──┘└──┘└──┘");
+    mvprintw(7, 0,  "   ┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐");
+    mvprintw(8, 0,  "   │ 1││ 1││ 1││ 1││:)││:)│");
+    mvprintw(9, 0,  "   └──┘└──┘└──┘└──┘└──┘└──┘");
+    mvprintw(10, 0, "   ┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐");
+    mvprintw(11, 0, "   │ 1││ 1││ 1││ 1││:)││:)│");
+    mvprintw(12, 0, "   └──┘└──┘└──┘└──┘└──┘└──┘");
+    mvprintw(13, 0, "   ┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐");
+    mvprintw(14, 0, "     ┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐┌──┐");
+    mvprintw(15, 0, "   < │ 1││ 2││ 3││ 4││ 5││ 6││ 7││ 8││ 9││10││ 1││ 2││ 3││ 4││ 5││ 6││ 7││ 8││ 9││10││11││12│ >");
+    mvprintw(16, 0, "     └──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘└──┘");
+    mvprintw(17, 0, "   ┌──┐┌──┐┌──┐┌──┐┌──┐");
+    mvprintw(18, 0, " > │  ││  ││  ││  ││ 7│");
+    mvprintw(19, 0, "   ├──┤├──┤├──┤├──┤├──┤");
+    mvprintw(20, 0, "   ├──┤├──┤├──┤├──┤├──┤");
+    mvprintw(21, 0, "   ├──┤├──┤├──┤├──┤├──┤");
+    mvprintw(22, 0, "   ├──┤├──┤├──┤├──┤├──┤");
+    mvprintw(23, 0, "   ├──┤├──┤├──┤├──┤├──┤");
+    mvprintw(24, 0, "   ├──┤├──┤├──┤├──┤├──┤");
+    mvprintw(25, 0, "   └──┘└──┘└──┘└──┘└──┘ >> Este randul tau! Ia ultima piatra sau trage o piatra noua! <<");
+    mvprintw(26, 0, "╔═════════════════════════════════════════════════════════════════════════════════════════════╗");
+    mvprintw(27, 0, "║ ┌────┐┌────┐┌────┐┌────┐      ┌────┐┌────┐┌────┐            ┌────┐┌────┐┌────┐┌────┐ ┌────┐ ║");
+    mvprintw(28, 0, "║ │  1 ││  2 ││  3 ││  4 │      │  6 ││  7 ││  8 │            │ 10 ││ 11 ││ 12 ││ 13 │ │  1 │ ║");
+    mvprintw(29, 0, "║ │    ││    ││    ││    │      │    ││    ││    │            │    ││    ││    ││    │ │    │ ║");
+    mvprintw(30, 0, "║ └────┘└────┘└────┘└────┘      └────┘└────┘└────┘            └────┘└────┘└────┘└────┘ └────┘ ║");
+    mvprintw(31, 0, "╠═════════════════════════════════════════════════════════════════════════════════════════════╣");
+    mvprintw(32, 0, "║                   ┌────┐┌────┐┌────┐            ┌────┐┌────┐┌────┐┌────┐             ┌────┐ ║");
+    mvprintw(33, 0, "║                   │  5 ││  5 ││  5 │            │  1 ││ :) ││  1 ││  1 │             │  9 │ ║");
+    mvprintw(34, 0, "║                   │    ││    ││    │            │    ││    ││    ││    │             │    │ ║");
+    mvprintw(35, 0, "║                   └────┘└────┘└────┘            └────┘└────┘└────┘└────┘             └────┘ ║");
+    mvprintw(36, 0, "╚═════════════════════════════════════════════════════════════════════════════════════════════╝");
 }
 
 int main() {
     init_game_ui();
     
-    draw_scores_and_top_grid();
-    draw_player_hand();
-    draw_deck_and_atu();
-    draw_main_board();
+    draw_new_design();
     
-    mvprintw(24, 2, "Apasa orice tasta pentru a inchide jocul...");
+    mvprintw(38, 0, "Apasa orice tasta pentru a inchide previzualizarea...");
     refresh(); 
     getch();   
     endwin();  
