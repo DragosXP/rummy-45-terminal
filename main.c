@@ -19,15 +19,15 @@ void init_game_ui() {
     start_color();
     use_default_colors();
 
-    init_pair(1, 15, COLOR_BLACK);   // Black tiles -> White text
-    init_pair(2, 33, COLOR_BLACK);   // Blue tiles -> Pure Blue
-    init_pair(3, 196, COLOR_BLACK);  // Red tiles -> Pure Red
-    init_pair(4, 226, COLOR_BLACK);  // Yellow tiles -> Pure Yellow
-    init_pair(5, 226, COLOR_BLACK);  // Joker -> Pure Yellow
-    init_pair(6, 15, COLOR_BLACK);   // Default/Borders -> Pure White
-    init_pair(7, 46, COLOR_BLACK);   // Highlight Cursor -> Neon Green
-    init_pair(8, 51, COLOR_BLACK);   // Staging Row 1 -> Cyan
-    init_pair(9, 201, COLOR_BLACK);  // Staging Row 2 / Selected -> Magenta
+    init_pair(1, 15, -1);   // Black tiles -> White text
+    init_pair(2, 33, -1);   // Blue tiles -> Pure Blue
+    init_pair(3, 196, -1);  // Red tiles -> Pure Red
+    init_pair(4, 226, -1);  // Yellow tiles -> Pure Yellow
+    init_pair(5, 226, -1);  // Joker -> Pure Yellow
+    init_pair(6, 15, -1);   // Default/Borders -> Pure White
+    init_pair(7, 46, -1);   // Highlight Cursor -> Neon Green
+    init_pair(8, 51, -1);   // Staging Row 1 -> Cyan
+    init_pair(9, 201, -1);  // Staging Row 2 / Selected -> Magenta
 
     keypad(stdscr, TRUE);
 }
@@ -330,17 +330,17 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
     int s = 26;
 
     attron(COLOR_PAIR(6));
-    mvprintw(s, 2, "╔═══════════════════════════════════════════════════════════════════════════════════════════════╗");
-    mvprintw(s + 5, 2, "╠═══════════════════════════════════════════════════════════════════════════════════════════════╣");
-    mvprintw(s + 10, 2, "╚═══════════════════════════════════════════════════════════════════════════════════════════════╝");
+    mvprintw(s, 2, "╔═════════════════════════════════════════════════════════════════════════════════════════════════╗");
+    mvprintw(s + 5, 2, "╠═════════════════════════════════════════════════════════════════════════════════════════════════╣");
+    mvprintw(s + 10, 2, "╚═════════════════════════════════════════════════════════════════════════════════════════════════╝");
     
     // Draw the left and right vertical borders for the inner rows
     for (int r = 0; r < 2; r++) {
         for (int row_offset = 1; row_offset <= 4; row_offset++) {
             int line_num = s + r * 5 + row_offset;
             mvprintw(line_num, 2, "║");
-            mvprintw(line_num, 3, "                                                                                                 ");
-            mvprintw(line_num, 98, "║");
+            mvprintw(line_num, 3, "                                                                                                     ");
+            mvprintw(line_num, 100, "║");
         }
     }
     attroff(COLOR_PAIR(6));
