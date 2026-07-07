@@ -148,15 +148,6 @@ int main() {
         Player *active = (current_player == 0) ? &p1 : &p2;
         draw_dynamic_hand(active, cursor);
 
-        // Overlay the deck and discard status info
-        attron(COLOR_PAIR(6) | A_BOLD);
-        if (discard_count > 0) {
-            mvprintw(12, 35, " [ DECK: %02d TILES ]   [ DISCARD TOP: %2d ] ", deck.size, discard_pile[discard_count - 1].number);
-        } else {
-            mvprintw(12, 35, " [ DECK: %02d TILES ]   [ DISCARD TOP: -- ] ", deck.size);
-        }
-        attroff(COLOR_PAIR(6) | A_BOLD);
-
         // Update your prompt line dynamically based on the game state
         if (state == STATE_DRAW) {
             mvprintw(25, 0, "   └──┘└──┘└──┘└──┘└──┘ >> [D] Draw from deck | [P] Pick from discard | [Q] Quit <<                   ");
