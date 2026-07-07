@@ -333,15 +333,17 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
     mvprintw(s, 2, "╔═══════════════════════════════════════════════════════════════════════════════════════════════╗");
     mvprintw(s + 5, 2, "╠═══════════════════════════════════════════════════════════════════════════════════════════════╣");
     mvprintw(s + 10, 2, "╚═══════════════════════════════════════════════════════════════════════════════════════════════╝");
-    attroff(COLOR_PAIR(6));
-
-    // Clear inner board rows
+    
+    // Draw the left and right vertical borders for the inner rows
     for (int r = 0; r < 2; r++) {
         for (int row_offset = 1; row_offset <= 4; row_offset++) {
             int line_num = s + r * 5 + row_offset;
+            mvprintw(line_num, 2, "║");
             mvprintw(line_num, 3, "                                                                                                 ");
+            mvprintw(line_num, 98, "║");
         }
     }
+    attroff(COLOR_PAIR(6));
 
     for (int r = 0; r < 2; r++) {
         for (int c = 0; c < 15; c++) {
