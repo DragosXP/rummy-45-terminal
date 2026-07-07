@@ -138,7 +138,8 @@ int main() {
     int running = 1;
 
     while (running) {
-        clear();
+        // DELETE OR COMMENT OUT THIS LINE:
+        // clear();
 
         // Render your untouched, full ASCII design first
         draw_new_design();
@@ -146,6 +147,8 @@ int main() {
         // Overlay the real hand data strictly into the hand row
         Player *active = (current_player == 0) ? &p1 : &p2;
         draw_dynamic_hand(active, cursor);
+
+        // ... rest of the loop remains exactly the same ...
 
         // Update your prompt line (Row 25) dynamically based on the game state
         if (state == STATE_DRAW) {
