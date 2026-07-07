@@ -5,7 +5,9 @@
 #include <string.h>
 
 void init_game_ui() {
+    // Force the terminal into 256-color mode directly from the C engine
     setenv("TERM", "xterm-256color", 1);
+
     setlocale(LC_ALL, "");
     initscr();
     raw();
@@ -14,6 +16,7 @@ void init_game_ui() {
     start_color();
     use_default_colors();
 
+    // Map strict Xterm-256 color IDs
     init_pair(1, 15, COLOR_BLACK);   // Black tiles -> White text
     init_pair(2, 33, COLOR_BLACK);   // Blue tiles -> Pure Blue
     init_pair(3, 196, COLOR_BLACK);  // Red tiles -> Pure Red
@@ -138,9 +141,6 @@ int main() {
     int running = 1;
 
     while (running) {
-        // DELETE OR COMMENT OUT THIS LINE:
-        // clear();
-
         // Render your untouched, full ASCII design first
         draw_new_design();
 
@@ -148,9 +148,16 @@ int main() {
         Player *active = (current_player == 0) ? &p1 : &p2;
         draw_dynamic_hand(active, cursor);
 
-        // ... rest of the loop remains exactly the same ...
+        // Overlay the deck and discard status info
+        attron(COLOR_PAIR(6) | A_BOLD);
+        if (discard_count > 0) {
+            mvprintw(12, 35, " [ DECK: %02d TILES ]   [ DISCARD TOP: %2d ] ", deck.size, discard_pile[discard_count - 1].number);
+        } else {
+            mvprintw(12, 35, " [ DECK: %02d TILES ]   [ DISCARD TOP: -- ] ", deck.size);
+        }
+        attroff(COLOR_PAIR(6) | A_BOLD);
 
-        // Update your prompt line (Row 25) dynamically based on the game state
+        // Update your prompt line dynamically based on the game state
         if (state == STATE_DRAW) {
             mvprintw(25, 0, "   └──┘└──┘└──┘└──┘└──┘ >> [D] Draw from deck | [P] Pick from discard | [Q] Quit <<                   ");
         } else if (state == STATE_DISCARD) {
@@ -166,6 +173,11 @@ int main() {
             if (ch == 'd' || ch == 'D') {
                 draw_from_deck(&deck, active);
                 state = STATE_DISCARD;
+            } else if (ch == 'p' || ch == 'P') {
+                if (discard_count > 0) {
+                    draw_from_discard(discard_pile, &discard_count, active);
+                    state = STATE_DISCARD;
+                }
             }
         } else if (state == STATE_DISCARD) {
             if (ch == KEY_LEFT && cursor > 0) cursor--;
