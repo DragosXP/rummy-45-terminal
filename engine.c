@@ -273,3 +273,90 @@ void draw_from_discard(Tile discard_pile[], int *discard_count, Player *player) 
         player->tile_count++;
     }
 }
+
+
+// ====================================================================
+// NOU: SCOR, REGULA DE 45 DE PUNCTE (CU SUITĂ OBLIGATORIE) ȘI VICTORIE
+// ====================================================================
+
+// Calculează punctele rămase în mâna jucătorului
+int calculate_hand_points(Player *player) {
+    int total = 0;
+    for (int i = 0; i < player->tile_count; i++) {
+        total += player->hand[i].points;
+    }
+    return total;
+}
+
+// Verifică dacă o singură formație atinge 45 de puncte și este SUITĂ
+bool check_initial_meld(Tile tiles[], int count) {
+    if (!is_valid_meld(tiles, count)) return false;
+    
+    // Regula casei: Dacă e o singură formație, ea trebuie obligatoriu să fie suită!
+    if (!is_valid_run(tiles, count)) return false;
+    
+    int total = 0;
+    for (int i = 0; i < count; i++) {
+        if (tiles[i].number != 0) {  // Sărim peste Jokeri
+            total += tiles[i].points;
+        }
+    }
+    return total >= 45;
+}
+
+// Verifică dacă mai multe formații cumulate ating 45 de puncte și conțin MINIM O SUITĂ
+bool check_initial_melds(Meld staged[], int meld_count) {
+    int total = 0;
+    bool has_run = false; // Ținem minte dacă am găsit măcar o suită
+
+    for (int m = 0; m < meld_count; m++) {
+        if (!is_valid_meld(staged[m].tiles, staged[m].count)) return false;
+        
+        // Verificăm dacă această formație specifică este o suită
+        if (is_valid_run(staged[m].tiles, staged[m].count)) {
+            has_run = true;
+        }
+        
+        // Adunăm punctele (fără Jokeri)
+        for (int i = 0; i < staged[m].count; i++) {
+            if (staged[m].tiles[i].number != 0) { 
+                total += staged[m].tiles[i].points;
+            }
+        }
+    }
+    
+    // Validarea finală: minim 45 de puncte ȘI să existe obligatoriu o suită
+    return (total >= 45 && has_run);
+}
+
+// Verifică dacă jucătorul a câștigat
+// După ce pune formațiile/lipiturile, rămâne cu o carte pe care o dă jos (decartare)
+// După decartare, ajunge la 0 cărți, deci a închis jocul.
+bool has_player_won(Player *player) {
+    return player->tile_count == 0;
+}
+
+// Elimină piesele etalate din mâna jucătorului
+void remove_tiles_from_hand(Player *player, int indices[], int num_indices) {
+    // Sortăm indicii descrescător pentru a nu strica ordinea la ștergere
+    for (int i = 0; i < num_indices - 1; i++) {
+        for (int j = 0; j < num_indices - i - 1; j++) {
+            if (indices[j] < indices[j + 1]) {
+                int temp = indices[j];
+                indices[j] = indices[j + 1];
+                indices[j + 1] = temp;
+            }
+        }
+    }
+    
+    // Eliminăm piesele și mutăm restul cărților spre stânga
+    for (int k = 0; k < num_indices; k++) {
+        int idx = indices[k];
+        if (idx >= 0 && idx < player->tile_count) {
+            for (int i = idx; i < player->tile_count - 1; i++) {
+                player->hand[i] = player->hand[i + 1];
+            }
+            player->tile_count--;
+        }
+    }
+}
