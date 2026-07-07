@@ -316,6 +316,15 @@ void draw_deck_piles(int deck_size, bool is_deck_selected) {
     }
 }
 
+// Helper to calculate column positioning with 1-space gap for the 15th tile
+int get_board_col(int c) {
+    if (c < 14) {
+        return 6 + c * 6;
+    } else {
+        return 91; // 6 + 14 * 6 + 1
+    }
+}
+
 // Renders the player's board at rows 26-36
 void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int held_r, int held_c, GameState state) {
     int s = 26;
@@ -336,7 +345,7 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
 
     for (int r = 0; r < 2; r++) {
         for (int c = 0; c < 15; c++) {
-            int col = 6 + c * 6;
+            int col = get_board_col(c);
             int row_y = s + r * 5 + 1;
             Tile tile = boards[player_idx][r][c];
 
@@ -377,12 +386,12 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
                 }
             } else {
                 if (is_cursor) {
-                    attron(COLOR_PAIR(7) | A_DIM);
-                    mvprintw(row_y, col, " :  : ");
-                    mvprintw(row_y + 1, col, " :  : ");
-                    mvprintw(row_y + 2, col, " :  : ");
-                    mvprintw(row_y + 3, col, " :  : ");
-                    attroff(COLOR_PAIR(7) | A_DIM);
+                    attron(COLOR_PAIR(7));
+                    mvprintw(row_y, col, "┌────┐");
+                    mvprintw(row_y + 1, col, "│    │");
+                    mvprintw(row_y + 2, col, "│    │");
+                    mvprintw(row_y + 3, col, "└────┘");
+                    attroff(COLOR_PAIR(7));
                 }
             }
         }
