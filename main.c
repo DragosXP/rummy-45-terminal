@@ -193,6 +193,11 @@ void draw_shared_table(Table *table) {
         // If the row reaches exactly 13, only draw the top border of the meld (showing there's more)
         if (start_r > 12) {
             if (start_r == 13) {
+                // Render the visual index [A], [B], etc. to the left of the meld
+                attron(COLOR_PAIR(7) | A_BOLD);
+                mvprintw(13, start_c - 3, "[%c]", 'A' + m);
+                attroff(COLOR_PAIR(7) | A_BOLD);
+
                 attron(COLOR_PAIR(6));
                 mvprintw(13, start_c, "┌");
                 int draw_count = (count > 7) ? 7 : count;
@@ -205,6 +210,11 @@ void draw_shared_table(Table *table) {
             }
             continue;
         }
+
+        // Render the visual index [A], [B], etc. to the left of the meld
+        attron(COLOR_PAIR(7) | A_BOLD);
+        mvprintw(start_r + 1, start_c - 3, "[%c]", 'A' + m);
+        attroff(COLOR_PAIR(7) | A_BOLD);
 
         attron(COLOR_PAIR(6));
         int draw_count = (count > 7) ? 7 : count;
@@ -420,7 +430,7 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
     mvprintw(s, 2, "╔═════════════════════════════════════════════════════════════════════════════════════════════════╗");
     mvprintw(s + 5, 2, "╠═════════════════════════════════════════════════════════════════════════════════════════════════╣");
     mvprintw(s + 10, 2, "╚═════════════════════════════════════════════════════════════════════════════════════════════════╝");
-    
+
     // Draw the left and right vertical borders for the inner rows
     for (int r = 0; r < 2; r++) {
         for (int row_offset = 1; row_offset <= 4; row_offset++) {
@@ -605,12 +615,12 @@ int main() {
         // Render dynamic parts
         draw_header(&p1, &p2, current_player, state);
         draw_shared_table(&table);
-        int disp_cursor = selecting_discard ? discard_cursor : 
-                          ((state == STATE_PLAY && cursor_r == -1) ? discard_count : (discard_count - 1));
-        int disp_view = selecting_discard ? discard_view_start : 
-                        ((state == STATE_PLAY && cursor_r == -1) ? 
-                         ((discard_count + 1 - 22 < 0) ? 0 : (discard_count + 1 - 22)) : 
-                         ((discard_count - 22 < 0) ? 0 : (discard_count - 22)));
+        int disp_cursor = selecting_discard ? discard_cursor :
+        ((state == STATE_PLAY && cursor_r == -1) ? discard_count : (discard_count - 1));
+        int disp_view = selecting_discard ? discard_view_start :
+        ((state == STATE_PLAY && cursor_r == -1) ?
+        ((discard_count + 1 - 22 < 0) ? 0 : (discard_count + 1 - 22)) :
+        ((discard_count - 22 < 0) ? 0 : (discard_count - 22)));
         bool disp_select = selecting_discard || (state == STATE_DRAW && !select_deck && !cursor_on_board_during_draw) || (state == STATE_PLAY && cursor_r == -1);
         draw_discard_pile(disp_cursor, disp_view, disp_select);
         draw_deck_piles(deck.size, (state == STATE_DRAW && !selecting_discard && select_deck && !cursor_on_board_during_draw));
@@ -633,7 +643,7 @@ int main() {
             printw("[FAZA: JUCARE & DECARTARE] ");
             attroff(COLOR_PAIR(7) | A_BOLD);
             if (meld_selection_mode) {
-                printw(">> [SĂGEȚI] Navigare | [Z] Selectează | [X] Trimite Formație | [C] Mod Mișcare | [Scrie quit] Ieși << ");
+                printw(">> [SĂGEȚI] Navigare | [Z] Selectează | [E/ENTER] Trimite Formații | [C] Mod Mișcare | [Scrie quit] Ieși << ");
             } else {
                 if (is_holding) {
                     if (cursor_r == -1) {
@@ -642,7 +652,7 @@ int main() {
                         printw(">> [SĂGEȚI] Mută | [Z] Plasează | [X] Renunță | [SUS] Decartează (din rândul 0) << ");
                     }
                 } else {
-                    printw(">> [SĂGEȚI] Navigare | [Z] Apucă piesa | [C] Mod Formații | [Scrie quit] Ieși << ");
+                    printw(">> [SĂGEȚI] Navigare | [Z] Apucă piesa | [L] Lipitură | [C] Mod Formații | [Scrie quit] Ieși << ");
                 }
             }
         } else if (state == STATE_DISCARD) {
@@ -708,16 +718,16 @@ int main() {
                     }
                 } else if (ch == 'z' || ch == 'Z') {
                     // Draw selected card and all cards to the right of it
-                    
+
                     // If the slot is occupied but stack is empty, push the existing card to the stack first
                     if (board_stack_count[current_player] == 0 && boards[current_player][0][14].id != -1) {
                         board_stack[current_player][board_stack_count[current_player]++] = boards[current_player][0][14];
                     }
-                    
+
                     for (int i = discard_cursor; i < discard_count; i++) {
                         board_stack[current_player][board_stack_count[current_player]++] = discard_pile[i];
                     }
-                    
+
                     boards[current_player][0][14] = board_stack[current_player][board_stack_count[current_player] - 1];
                     discard_count = discard_cursor;
                     sync_board_to_player(current_player, active);
@@ -902,8 +912,8 @@ int main() {
                     } else {
                         selected_tiles[current_player][cursor_r][cursor_c] = !selected_tiles[current_player][cursor_r][cursor_c];
                     }
-                } else if (ch == 'x' || ch == 'X') {
-                    // X sends/plays the meld
+                } else if (ch == 'e' || ch == 'E' || ch == '\n' || ch == KEY_ENTER) {
+                    // E or ENTER sends/plays the staged melds
                     if (play_selected_meld(current_player, active, &table)) {
                         mvprintw(38, 5, "Formație jucată cu succes!");
                         refresh();
@@ -1015,6 +1025,41 @@ int main() {
                             cursor_r = 0;
                         }
                     }
+                } else if (ch == 'l' || ch == 'L') {
+                    // Lipituri interaction
+                    if (!is_holding && cursor_r >= 0 && boards[current_player][cursor_r][cursor_c].id != -1) {
+                        mvprintw(38, 5, "Lipește piesa la formația (A-Z): ");
+                        refresh();
+
+                        int target = getch();
+                        if ((target >= 'a' && target <= 'z') || (target >= 'A' && target <= 'Z')) {
+                            int meld_idx = (target >= 'a' && target <= 'z') ? (target - 'a') : (target - 'A');
+
+                            if (meld_idx >= 0 && meld_idx < table.meld_count) {
+                                mvprintw(38, 5, "Încercare lipire la [%c]...                     ", 'A' + meld_idx);
+                                refresh();
+
+                                // TODO: Link with the Engine functionality here.
+                                // Example integration for the engine team:
+                                /*
+                                 *                               if (attach_tile_to_meld(&table, meld_idx, boards[current_player][cursor_r][cursor_c])) {
+                                 *                                   boards[current_player][cursor_r][cursor_c].id = -1;
+                                 *                                   sync_board_to_player(current_player, active);
+                                 *                                   mvprintw(38, 5, "Lipitură reușită!                               ");
+                            } else {
+                                mvprintw(38, 5, "Mutare invalidă conform regulilor!              ");
+                            }
+                            */
+                            } else {
+                                mvprintw(38, 5, "Index formație inexistent!                      ");
+                            }
+                        } else {
+                            mvprintw(38, 5, "Acțiune anulată.                                ");
+                        }
+                        refresh();
+                        napms(1200);
+                        mvprintw(38, 5, "                                                                        ");
+                    }
                 } else if (ch == 'c' || ch == 'C') {
                     meld_selection_mode = true;
                     // Cancel any active hold and selections when entering meld mode
@@ -1040,7 +1085,7 @@ int main() {
             } else if (ch == 'z' || ch == 'Z') {
                 if (boards[current_player][cursor_r][cursor_c].id != -1) {
                     discard_tile_from_board(current_player, active, cursor_r, cursor_c);
-                    
+
                     // Check win condition
                     if (active->tile_count == 0) {
                         clear();
