@@ -55,31 +55,28 @@ void shuffle_deck(Deck *deck) {
 }
 
 // gives tiles to players
-void deal_hands(Deck *deck, Player *p1, Player *p2) {
-    p1->tile_count = 0;
-    p2->tile_count = 0;
-    p1->has_melded = false;
-    p2->has_melded = false;
-    p1->drew_from_discard_this_turn = false;
-    p2->drew_from_discard_this_turn = false;
-    p1->primary_discard_drawn_tile.id = -1;
-    p2->primary_discard_drawn_tile.id = -1;
+void deal_hands(Deck *deck, Player players[], int num_players, int starting_player_idx) {
+    for (int i = 0; i < num_players; i++) {
+        players[i].tile_count = 0;
+        players[i].has_melded = false;
+        players[i].drew_from_discard_this_turn = false;
+        players[i].primary_discard_drawn_tile.id = -1;
+        players[i].score = 0;
+    }
 
     // Deal 14 tiles alternating
     for (int i = 0; i < 14; i++) {
-        deck->size--;
-        p1->hand[p1->tile_count] = deck->tiles[deck->size];
-        p1->tile_count++;
-
-        deck->size--;
-        p2->hand[p2->tile_count] = deck->tiles[deck->size];
-        p2->tile_count++;
+        for (int p = 0; p < num_players; p++) {
+            deck->size--;
+            players[p].hand[players[p].tile_count] = deck->tiles[deck->size];
+            players[p].tile_count++;
+        }
     }
 
-    // Give 15th tile to dealer (Player 1)
+    // Give 15th tile to the starting player
     deck->size--;
-    p1->hand[p1->tile_count] = deck->tiles[deck->size];
-    p1->tile_count++;
+    players[starting_player_idx].hand[players[starting_player_idx].tile_count] = deck->tiles[deck->size];
+    players[starting_player_idx].tile_count++;
 }
 
 // Moves the top tile from the deck to the player's hand
@@ -231,7 +228,7 @@ void init_table(Table *table) {
     table->meld_count = 0;
 }
 
-bool place_meld(Table *table, Tile tiles[], int count) {
+bool place_meld(Table *table, Tile tiles[], int count, int owner_id) {
     if (!is_valid_meld(tiles, count)) return false;
     if (table->meld_count >= MAX_MELDS) return false;
 
@@ -240,6 +237,7 @@ bool place_meld(Table *table, Tile tiles[], int count) {
         m->tiles[i] = tiles[i];
     }
     m->count = count;
+    m->owner_id = owner_id;
     table->meld_count++;
     return true;
 }
@@ -388,15 +386,18 @@ void remove_tiles_from_hand(Player *player, int indices[], int num_indices) {
 // EXECUTAREA MUTĂRILOR (ETALARE INIȚIALĂ ȘI LIPITURI)
 // ====================================================================
 
-bool play_initial_melds(Player *player, Table *table, Meld staged[], int meld_count, int hand_indices[], int num_indices) {
+bool play_initial_melds(Player *player, Table *table, Meld staged[], int meld_count, int hand_indices[], int num_indices, int player_idx) {
     if (player->has_melded == true) return false; 
 
     if (check_initial_melds(staged, meld_count)) {
+        int earned_points = 0;
         for (int i = 0; i < meld_count; i++) {
-            place_meld(table, staged[i].tiles, staged[i].count);
+            place_meld(table, staged[i].tiles, staged[i].count, player_idx);
+            earned_points += calculate_meld_points(staged[i].tiles, staged[i].count);
         }
         remove_tiles_from_hand(player, hand_indices, num_indices);
         player->has_melded = true;
+        player->score += earned_points;
         return true; 
     }
     return false; 
@@ -458,4 +459,85 @@ bool validate_discard_rules(const Player *player) {
         }
     }
     return true; 
+}
+
+// ====================================================================
+// SMART UNORDERED SPLITTING (SUBSET COMBINATORICS)
+// ====================================================================
+
+void partition_unordered_recursive(Tile pool[], int pool_size, Meld current_partition[], int partition_size, int current_score, Meld best_partition[], int *best_partition_size, int *best_score) {
+    if (pool_size == 0) {
+        if (current_score > *best_score) {
+            *best_score = current_score;
+            *best_partition_size = partition_size;
+            for (int i = 0; i < partition_size; i++) {
+                best_partition[i] = current_partition[i];
+            }
+        }
+        return;
+    }
+    
+    if (pool_size < 3) return;
+
+    int num_subsets = 1 << pool_size;
+    for (int mask = 1; mask < num_subsets; mask++) {
+        // Force the first tile of the pool to be in the subset to avoid duplicate partitions
+        if (!(mask & 1)) continue;
+
+        int len = 0;
+        for (int i = 0; i < pool_size; i++) {
+            if (mask & (1 << i)) len++;
+        }
+        if (len < 3) continue;
+
+        Tile subset[15];
+        int s_idx = 0;
+        for (int i = 0; i < pool_size; i++) {
+            if (mask & (1 << i)) subset[s_idx++] = pool[i];
+        }
+
+        bool valid = false;
+        if (is_valid_group(subset, len)) {
+            valid = true;
+        } else if (is_valid_run(subset, len)) {
+            sort_run(subset, len); // Sort the run correctly
+            valid = true;
+        }
+
+        if (valid) {
+            current_partition[partition_size].count = len;
+            for (int i = 0; i < len; i++) {
+                current_partition[partition_size].tiles[i] = subset[i];
+            }
+            
+            Tile new_pool[15];
+            int n_idx = 0;
+            for (int i = 0; i < pool_size; i++) {
+                if (!(mask & (1 << i))) new_pool[n_idx++] = pool[i];
+            }
+
+            int score = calculate_meld_points(subset, len);
+            partition_unordered_recursive(new_pool, pool_size - len, current_partition, partition_size + 1, current_score + score, best_partition, best_partition_size, best_score);
+        }
+    }
+}
+
+int split_unordered_melds(Tile input[], int count, Meld output_melds[]) {
+    if (count < 3) return 0;
+
+    Meld current_partition[5];
+    Meld best_partition[5];
+    int best_partition_size = 0;
+    int best_score = -1;
+
+    partition_unordered_recursive(input, count, current_partition, 0, 0, best_partition, &best_partition_size, &best_score);
+
+    if (best_score >= 0) {
+        for(int i = 0; i < best_partition_size; i++) {
+            output_melds[i] = best_partition[i];
+        }
+        return best_partition_size;
+    }
+    
+    return 0; // Failed to partition
 }
