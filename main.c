@@ -13,6 +13,9 @@ int deck_pile_sizes[20];
 bool meld_selection_mode = false;
 bool cursor_on_board_during_draw = false;
 
+Tile board_stack[2][TOTAL_TILES];
+int board_stack_count[2] = {0, 0};
+
 void init_game_ui() {
     setenv("TERM", "xterm-256color", 1);
     setlocale(LC_ALL, "");
@@ -46,12 +49,38 @@ void init_game_ui() {
 
 // Synchronizes the player board tiles to the engine's flat hand structure
 void sync_board_to_player(int player_idx, Player *player) {
+    // 1. First, check if the stack top on the board was modified or removed.
+    if (board_stack_count[player_idx] > 0) {
+        Tile current_tile = boards[player_idx][0][14];
+        Tile top_of_stack = board_stack[player_idx][board_stack_count[player_idx] - 1];
+        if (current_tile.id == -1) {
+            // The top card of the stack was moved or discarded
+            board_stack_count[player_idx]--;
+            if (board_stack_count[player_idx] > 0) {
+                // Display the new top of the stack on the board
+                boards[player_idx][0][14] = board_stack[player_idx][board_stack_count[player_idx] - 1];
+            }
+        } else if (current_tile.id != top_of_stack.id) {
+            // The top of the stack was swapped with another card, so update the stack's top card
+            board_stack[player_idx][board_stack_count[player_idx] - 1] = current_tile;
+        }
+    }
+
+    // 2. Perform the synchronization from the board cells to the player's engine hand structure.
     player->tile_count = 0;
     for (int r = 0; r < 2; r++) {
         for (int c = 0; c < 15; c++) {
-            if (boards[player_idx][r][c].id != -1) {
-                player->hand[player->tile_count] = boards[player_idx][r][c];
-                player->tile_count++;
+            if (r == 0 && c == 14 && board_stack_count[player_idx] > 0) {
+                // If it is the stack slot, add the entire stack to the hand
+                for (int i = 0; i < board_stack_count[player_idx]; i++) {
+                    player->hand[player->tile_count] = board_stack[player_idx][i];
+                    player->tile_count++;
+                }
+            } else {
+                if (boards[player_idx][r][c].id != -1) {
+                    player->hand[player->tile_count] = boards[player_idx][r][c];
+                    player->tile_count++;
+                }
             }
         }
     }
@@ -443,6 +472,10 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
                     attron(COLOR_PAIR(10) | A_BOLD);
                     mvprintw(row_y + 2, col + 2, "▲▲");
                     attroff(COLOR_PAIR(10) | A_BOLD);
+                } else if (r == 0 && c == 14 && board_stack_count[player_idx] > 1) {
+                    attron(COLOR_PAIR(11) | A_BOLD);
+                    mvprintw(row_y + 2, col + 2, "+%d", board_stack_count[player_idx] - 1);
+                    attroff(COLOR_PAIR(11) | A_BOLD);
                 }
             } else {
                 if (is_cursor) {
@@ -560,6 +593,12 @@ int main() {
     bool select_deck = true;
     meld_selection_mode = false;
 
+    // Memory for cursor positions in different zones
+    int saved_board_r[2] = {0, 0};
+    int saved_board_c[2] = {0, 0};
+    bool saved_select_deck[2] = {true, true};
+    int saved_discard_cursor = -1;
+
     while (running) {
         Player *active = (current_player == 0) ? &p1 : &p2;
 
@@ -654,6 +693,7 @@ int main() {
                 if (ch == KEY_LEFT) {
                     if (discard_cursor > 0) {
                         discard_cursor--;
+                        saved_discard_cursor = discard_cursor;
                         if (discard_cursor < discard_view_start) {
                             discard_view_start = discard_cursor;
                         }
@@ -661,43 +701,31 @@ int main() {
                 } else if (ch == KEY_RIGHT) {
                     if (discard_cursor < discard_count - 1) {
                         discard_cursor++;
+                        saved_discard_cursor = discard_cursor;
                         if (discard_cursor >= discard_view_start + 22) {
                             discard_view_start = discard_cursor - 21;
                         }
                     }
                 } else if (ch == 'z' || ch == 'Z') {
                     // Draw selected card and all cards to the right of it
-                    int drawn_ids[100];
-                    int drawn_num = 0;
-                    for (int i = discard_cursor; i < discard_count; i++) {
-                        if (drawn_num < 100) {
-                            drawn_ids[drawn_num++] = discard_pile[i].id;
-                        }
-                        add_tile_to_board(current_player, discard_pile[i]);
+                    
+                    // If the slot is occupied but stack is empty, push the existing card to the stack first
+                    if (board_stack_count[current_player] == 0 && boards[current_player][0][14].id != -1) {
+                        board_stack[current_player][board_stack_count[current_player]++] = boards[current_player][0][14];
                     }
+                    
+                    for (int i = discard_cursor; i < discard_count; i++) {
+                        board_stack[current_player][board_stack_count[current_player]++] = discard_pile[i];
+                    }
+                    
+                    boards[current_player][0][14] = board_stack[current_player][board_stack_count[current_player] - 1];
                     discard_count = discard_cursor;
                     sync_board_to_player(current_player, active);
                     selecting_discard = false;
                     state = STATE_PLAY;
 
-                    // Focus the selector on the first drawn card
-                    int first_r = -1, first_c = -1;
-                    for (int i = 0; i < drawn_num; i++) {
-                        for (int r = 0; r < 2; r++) {
-                            for (int c = 0; c < 15; c++) {
-                                if (boards[current_player][r][c].id == drawn_ids[i]) {
-                                    if (first_r == -1) {
-                                        first_r = r;
-                                        first_c = c;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if (first_r != -1) {
-                        cursor_r = first_r;
-                        cursor_c = first_c;
-                    }
+                    cursor_r = 0;
+                    cursor_c = 14;
                 } else if (ch == 'x' || ch == 'X') {
                     selecting_discard = false;
                 }
@@ -713,8 +741,10 @@ int main() {
                         cursor_r = 0;
                     } else if (cursor_r == 0) {
                         if (!is_holding) {
+                            saved_board_r[current_player] = cursor_r;
+                            saved_board_c[current_player] = cursor_c;
                             cursor_on_board_during_draw = false;
-                            select_deck = true;
+                            select_deck = saved_select_deck[current_player];
                         }
                     }
                 } else if (ch == KEY_DOWN) {
@@ -782,14 +812,17 @@ int main() {
                 if (ch == KEY_UP) {
                     if (discard_count > 0) {
                         select_deck = false;
+                        saved_select_deck[current_player] = false;
                     }
                 } else if (ch == KEY_DOWN) {
                     if (select_deck) {
+                        saved_select_deck[current_player] = select_deck; // true
                         cursor_on_board_during_draw = true;
-                        cursor_r = 0;
-                        cursor_c = 0;
+                        cursor_r = saved_board_r[current_player];
+                        cursor_c = saved_board_c[current_player];
                     } else {
                         select_deck = true;
+                        saved_select_deck[current_player] = true;
                     }
                 } else if (ch == 'z' || ch == 'Z') {
                     if (select_deck) {
@@ -833,8 +866,12 @@ int main() {
                     } else {
                         if (discard_count > 0) {
                             selecting_discard = true;
-                            discard_cursor = discard_count - 1;
-                            discard_view_start = discard_count - 22;
+                            if (saved_discard_cursor >= 0 && saved_discard_cursor < discard_count) {
+                                discard_cursor = saved_discard_cursor;
+                            } else {
+                                discard_cursor = discard_count - 1;
+                            }
+                            discard_view_start = discard_cursor - 21;
                             if (discard_view_start < 0) discard_view_start = 0;
                         }
                     }
@@ -924,6 +961,10 @@ int main() {
                             getch();
                             running = 0;
                         } else {
+                            int save_r = (cursor_r >= 0) ? cursor_r : 0;
+                            saved_board_r[current_player] = save_r;
+                            saved_board_c[current_player] = cursor_c;
+
                             current_player = 1 - current_player;
                             cursor_r = 0;
                             cursor_c = 0;
@@ -1009,6 +1050,10 @@ int main() {
                         getch();
                         running = 0;
                     } else {
+                        int save_r = (cursor_r >= 0) ? cursor_r : 0;
+                        saved_board_r[current_player] = save_r;
+                        saved_board_c[current_player] = cursor_c;
+
                         current_player = 1 - current_player;
                         cursor_r = 0;
                         cursor_c = 0;
