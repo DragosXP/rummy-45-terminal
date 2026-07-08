@@ -78,8 +78,14 @@ bool place_meld(Table *table, Tile tiles[], int count);
 // Extragerea din teancul de decartare (Draw from discard pile)
 void draw_from_discard(Tile discard_pile[], int *discard_count, Player *player);
 
-#endif 
+// Validarea si executarea etalarii initiale (45 puncte)
+bool play_initial_melds(Player *player, Table *table, Meld staged[], int meld_count, int hand_indices[], int num_indices);
 
+// Funcția de bază pentru a testa o lipitură
+bool add_tile_to_meld(Table *table, int meld_index, Tile tile);
+
+// Funcția completă care aplică lipitura (inclusiv restricția și scoaterea din mână)
+bool play_lipitura(Player *player, Table *table, int meld_index, int hand_index);
 
 // Calcularea punctelor din mână (Scoring)
 int calculate_hand_points(Player *player);
@@ -95,3 +101,5 @@ bool has_player_won(Player *player);
 
 // Eliminarea pieselor specifice din mâna jucătorului (când le pune pe masă)
 void remove_tiles_from_hand(Player *player, int indices[], int num_indices);
+
+#endif
