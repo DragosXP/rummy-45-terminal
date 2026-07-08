@@ -12,6 +12,9 @@ int player_count = 2; // Default to 2 players (renders 11 piles)
 int deck_pile_sizes[20];
 bool meld_selection_mode = false;
 bool cursor_on_board_during_draw = false;
+int attach_side = 0; // 0 = Left, 1 = Right
+
+extern void sort_run(Tile tiles[], int count);
 
 Tile board_stack[2][TOTAL_TILES];
 int board_stack_count[2] = {0, 0};
@@ -173,13 +176,173 @@ void draw_header(Player *p1, Player *p2, int current_player, GameState state) {
     mvprintw(0, 86, "Messi (1200 p)");
 }
 
+// Helper function to attach a tile to a specific side of a meld
+bool attach_tile_to_meld_side(Table *table, int meld_idx, Tile tile, int side) {
+    if (meld_idx >= 0 && meld_idx < table->meld_count) {
+        Meld *meld = &table->melds[meld_idx];
+        if (meld->count < 13) {
+            if (side == 0) {
+                // Shift right and insert at index 0 (LEFT)
+                for (int i = meld->count; i > 0; i--) {
+                    meld->tiles[i] = meld->tiles[i - 1];
+                }
+                meld->tiles[0] = tile;
+                meld->count++;
+            } else {
+                // Append to end (RIGHT)
+                meld->tiles[meld->count++] = tile;
+            }
+            // Sort if it is a run to keep ordering and Joker placement correct
+            if (is_valid_run(meld->tiles, meld->count)) {
+                sort_run(meld->tiles, meld->count);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+// Verification function to see if a tile can validly attach to a meld side
+bool can_attach_tile_to_side(Meld *meld, Tile tile, int side) {
+    if (meld->count >= 13) return false;
+
+    // Group (terță) validation
+    if (is_valid_group(meld->tiles, meld->count)) {
+        if (meld->count >= 4) return false;
+        // Check if same color already exists in group
+        for (int i = 0; i < meld->count; i++) {
+            if (meld->tiles[i].color == tile.color && meld->tiles[i].number != 0 && tile.number != 0) {
+                return false;
+            }
+        }
+        // Temporarily append and check
+        Tile temp[5];
+        for (int i = 0; i < meld->count; i++) temp[i] = meld->tiles[i];
+        temp[meld->count] = tile;
+        return is_valid_group(temp, meld->count + 1);
+    }
+
+    // Run (suită) validation
+    if (is_valid_run(meld->tiles, meld->count)) {
+        // Find run color (first non-joker)
+        int run_color = -1;
+        for (int i = 0; i < meld->count; i++) {
+            if (meld->tiles[i].number != 0) {
+                run_color = meld->tiles[i].color;
+                break;
+            }
+        }
+        // Check color compatibility
+        if (tile.number != 0 && run_color != -1 && tile.color != run_color) {
+            return false;
+        }
+
+        // Construct new sequence depending on side
+        Tile temp[14];
+        if (side == 0) {
+            // Attach to LEFT
+            temp[0] = tile;
+            for (int i = 0; i < meld->count; i++) {
+                temp[i + 1] = meld->tiles[i];
+            }
+        } else {
+            // Attach to RIGHT
+            for (int i = 0; i < meld->count; i++) {
+                temp[i] = meld->tiles[i];
+            }
+            temp[meld->count] = tile;
+        }
+
+        // Check if the resulting meld is a valid run
+        if (!is_valid_run(temp, meld->count + 1)) {
+            return false;
+        }
+
+        // Resolve Jokers in the sequence to check side logic mathematically
+        bool has_13 = false;
+        for (int k = 0; k < meld->count + 1; k++) {
+            if (temp[k].number == 13) has_13 = true;
+        }
+
+        int resolved_vals[14];
+        // First pass: resolve non-jokers, treating Ace (1) as 14 if 13 is present
+        for (int i = 0; i < meld->count + 1; i++) {
+            if (temp[i].number != 0) {
+                if (temp[i].number == 1 && has_13) {
+                    resolved_vals[i] = 14;
+                } else {
+                    resolved_vals[i] = temp[i].number;
+                }
+            }
+        }
+
+        // Second pass: resolve Jokers based on resolved values
+        for (int i = 0; i < meld->count + 1; i++) {
+            if (temp[i].number == 0) {
+                // Find first non-joker
+                int non_joker_idx = -1;
+                for (int k = 0; k < meld->count + 1; k++) {
+                    if (temp[k].number != 0) {
+                        non_joker_idx = k;
+                        break;
+                    }
+                }
+                if (non_joker_idx != -1) {
+                    resolved_vals[i] = resolved_vals[non_joker_idx] + (i - non_joker_idx);
+                } else {
+                    resolved_vals[i] = 1;
+                }
+            }
+        }
+
+        if (side == 0) {
+            return (resolved_vals[0] < resolved_vals[1]);
+        } else {
+            return (resolved_vals[meld->count] > resolved_vals[meld->count - 1]);
+        }
+    }
+    return false;
+}
+
+// Retrieves the single active tile targeted for placement (either held or single-selected)
+Tile get_active_tile(int player_idx, bool is_holding, int held_r, int held_c) {
+    Tile tile;
+    tile.id = -1;
+    tile.number = -1;
+
+    if (is_holding) {
+        if (held_r >= 0 && held_r < 2 && held_c >= 0 && held_c < 15) {
+            tile = boards[player_idx][held_r][held_c];
+        }
+    } else if (meld_selection_mode) {
+        int selected_count = 0;
+        int sel_r = -1, sel_c = -1;
+        for (int r = 0; r < 2; r++) {
+            for (int c = 0; c < 15; c++) {
+                if (selected_tiles[player_idx][r][c] && boards[player_idx][r][c].id != -1) {
+                    selected_count++;
+                    sel_r = r;
+                    sel_c = c;
+                }
+            }
+        }
+        if (selected_count == 1) {
+            tile = boards[player_idx][sel_r][sel_c];
+        }
+    }
+    return tile;
+}
+
 // Renders the shared table (all played melds) at rows 1-13
-void draw_shared_table(Table *table) {
+void draw_shared_table(Table *table, bool is_holding, int cursor_r, int cursor_c, int current_player, int held_r, int held_c) {
     for (int r = 1; r <= 13; r++) {
         mvprintw(r, 0, "                                                                                                      ");
     }
 
     int col_starts[4] = {3, 29, 55, 81};
+
+    // Get active tile for attachment preview
+    Tile active_tile = get_active_tile(current_player, is_holding, held_r, held_c);
 
     for (int m = 0; m < table->meld_count; m++) {
         int row_idx = m / 4;
@@ -188,70 +351,236 @@ void draw_shared_table(Table *table) {
         int start_c = col_starts[col_idx];
 
         Meld *meld = &table->melds[m];
-        int count = meld->count;
+
+        // Determine if this meld is targeted
+        bool is_targeted = (cursor_r == -1 && cursor_c == m && active_tile.id != -1);
+
+        // Construct the list of tiles to draw
+        Tile draw_tiles[20];
+        int draw_count = 0;
+        int active_tile_idx = -1;
+
+        if (is_targeted) {
+            if (attach_side == 0) {
+                // LEFT attachment: preview card at index 0, shift others right
+                draw_tiles[0] = active_tile;
+                active_tile_idx = 0;
+                for (int i = 0; i < meld->count; i++) {
+                    draw_tiles[i + 1] = meld->tiles[i];
+                }
+                draw_count = meld->count + 1;
+                start_c = start_c - 3; // Shift start column left to make space
+            } else {
+                // RIGHT attachment: preview card at the end
+                for (int i = 0; i < meld->count; i++) {
+                    draw_tiles[i] = meld->tiles[i];
+                }
+                draw_tiles[meld->count] = active_tile;
+                active_tile_idx = meld->count;
+                draw_count = meld->count + 1;
+            }
+        } else {
+            for (int i = 0; i < meld->count; i++) {
+                draw_tiles[i] = meld->tiles[i];
+            }
+            draw_count = meld->count;
+        }
+
+        int limit_draw = (draw_count > 8) ? 8 : draw_count;
+        int left_pair = (active_tile_idx == 0) ? 7 : 6;
+        int right_pair = (active_tile_idx == limit_draw - 1) ? 7 : 6;
+        int normal_pair = 6;
 
         // If the row reaches exactly 13, only draw the top border of the meld (showing there's more)
         if (start_r > 12) {
             if (start_r == 13) {
-                attron(COLOR_PAIR(6));
+                attron(COLOR_PAIR(left_pair));
                 mvprintw(13, start_c, "┌");
-                int draw_count = (count > 7) ? 7 : count;
-                for (int t = 0; t < draw_count; t++) {
-                    if (t > 0) printw("┬");
+                attroff(COLOR_PAIR(left_pair));
+
+                for (int t = 0; t < limit_draw; t++) {
+                    int seg_cp = (t == active_tile_idx) ? 7 : 6;
+                    if (t > 0) {
+                        int sep_cp = (t == active_tile_idx || t - 1 == active_tile_idx) ? 7 : 6;
+                        attron(COLOR_PAIR(sep_cp));
+                        printw("┬");
+                        attroff(COLOR_PAIR(sep_cp));
+                    }
+                    attron(COLOR_PAIR(seg_cp));
                     printw("──");
+                    attroff(COLOR_PAIR(seg_cp));
                 }
+
+                attron(COLOR_PAIR(right_pair));
                 printw("┐");
-                attroff(COLOR_PAIR(6));
+                attroff(COLOR_PAIR(right_pair));
             }
             continue;
         }
 
-        attron(COLOR_PAIR(6));
-        int draw_count = (count > 7) ? 7 : count;
-
         // Draw top border
+        attron(COLOR_PAIR(left_pair));
         mvprintw(start_r, start_c, "┌");
-        for (int t = 0; t < draw_count; t++) {
-            if (t > 0) printw("┬");
+        attroff(COLOR_PAIR(left_pair));
+
+        for (int t = 0; t < limit_draw; t++) {
+            int seg_cp = (t == active_tile_idx) ? 7 : 6;
+            if (t > 0) {
+                int sep_cp = (t == active_tile_idx || t - 1 == active_tile_idx) ? 7 : 6;
+                attron(COLOR_PAIR(sep_cp));
+                printw("┬");
+                attroff(COLOR_PAIR(sep_cp));
+            }
+            attron(COLOR_PAIR(seg_cp));
             printw("──");
+            attroff(COLOR_PAIR(seg_cp));
         }
+
+        attron(COLOR_PAIR(right_pair));
         printw("┐");
+        attroff(COLOR_PAIR(right_pair));
 
         // Draw middle row containing tile values
+        attron(COLOR_PAIR(left_pair));
         mvprintw(start_r + 1, start_c, "│");
-        attroff(COLOR_PAIR(6));
+        attroff(COLOR_PAIR(left_pair));
 
-        for (int t = 0; t < draw_count; t++) {
-            if (count > 7 && t == 3) {
-                attron(COLOR_PAIR(6) | A_BOLD);
+        for (int t = 0; t < limit_draw; t++) {
+            if (draw_count > 8 && t == 3) {
+                int sep_pair = (t == active_tile_idx || t + 1 == active_tile_idx) ? 7 : 6;
+                attron(COLOR_PAIR(normal_pair) | A_BOLD);
                 printw("..");
-                attroff(COLOR_PAIR(6) | A_BOLD);
+                attroff(COLOR_PAIR(normal_pair) | A_BOLD);
+                attron(COLOR_PAIR(sep_pair));
+                printw("│");
+                attroff(COLOR_PAIR(sep_pair));
             } else {
                 int actual_idx = t;
-                if (count > 7 && t > 3) {
-                    actual_idx = count - (7 - t);
+                if (draw_count > 8 && t > 3) {
+                    actual_idx = draw_count - (8 - t);
                 }
-                Tile tile = meld->tiles[actual_idx];
+                Tile tile = draw_tiles[actual_idx];
                 int cp = (tile.number == 0) ? 5 : tile.color + 1;
 
                 attron(COLOR_PAIR(cp) | A_BOLD);
                 if (tile.number == 0) printw(":)");
                 else printw("%2d", tile.number);
                 attroff(COLOR_PAIR(cp) | A_BOLD);
-            }
 
-            attron(COLOR_PAIR(6));
-            printw("│");
+                int sep_pair = (t == limit_draw - 1) ? right_pair : 
+                               ((t == active_tile_idx || t + 1 == active_tile_idx) ? 7 : 6);
+                attron(COLOR_PAIR(sep_pair));
+                printw("│");
+                attroff(COLOR_PAIR(sep_pair));
+            }
         }
 
         // Draw bottom border
+        attron(COLOR_PAIR(left_pair));
         mvprintw(start_r + 2, start_c, "└");
-        for (int t = 0; t < draw_count; t++) {
-            if (t > 0) printw("┴");
+        attroff(COLOR_PAIR(left_pair));
+
+        for (int t = 0; t < limit_draw; t++) {
+            int seg_cp = (t == active_tile_idx) ? 7 : 6;
+            if (t > 0) {
+                int sep_cp = (t == active_tile_idx || t - 1 == active_tile_idx) ? 7 : 6;
+                attron(COLOR_PAIR(sep_cp));
+                printw("┴");
+                attroff(COLOR_PAIR(sep_cp));
+            }
+            attron(COLOR_PAIR(seg_cp));
             printw("──");
+            attroff(COLOR_PAIR(seg_cp));
         }
+
+        attron(COLOR_PAIR(right_pair));
         printw("┘");
-        attroff(COLOR_PAIR(6));
+        attroff(COLOR_PAIR(right_pair));
+    }
+
+    // Renders preview meld if in meld selection mode and cursor is at row -1
+    if (meld_selection_mode && cursor_r == -1 && table->meld_count < MAX_MELDS) {
+        Tile preview_tiles[30];
+        int preview_count = 0;
+        for (int r = 0; r < 2; r++) {
+            for (int c = 0; c < 15; c++) {
+                if (selected_tiles[current_player][r][c] && boards[current_player][r][c].id != -1) {
+                    preview_tiles[preview_count++] = boards[current_player][r][c];
+                }
+            }
+        }
+
+        if (preview_count > 1) {
+            // Sort preview tiles if it's a valid run, to show correct final display order
+            if (is_valid_run(preview_tiles, preview_count)) {
+                sort_run(preview_tiles, preview_count);
+            }
+
+            int m = table->meld_count;
+            int row_idx = m / 4;
+            int col_idx = m % 4;
+            int start_r = 1 + row_idx * 3;
+            int start_c = col_starts[col_idx];
+
+            int meld_border_pair = 7; // Highlight in Neon Green
+            int draw_count = (preview_count > 7) ? 7 : preview_count;
+
+            if (start_r <= 12) {
+                attron(COLOR_PAIR(meld_border_pair));
+                // Draw top border
+                mvprintw(start_r, start_c, "┌");
+                for (int t = 0; t < draw_count; t++) {
+                    if (t > 0) printw("┬");
+                    printw("──");
+                }
+                printw("┐");
+
+                // Draw middle row containing tile values
+                mvprintw(start_r + 1, start_c, "│");
+                attroff(COLOR_PAIR(meld_border_pair));
+
+                for (int t = 0; t < draw_count; t++) {
+                    if (preview_count > 7 && t == 3) {
+                        attron(COLOR_PAIR(meld_border_pair) | A_BOLD);
+                        printw("..");
+                        attroff(COLOR_PAIR(meld_border_pair) | A_BOLD);
+                    } else {
+                        int actual_idx = t;
+                        if (preview_count > 7 && t > 3) {
+                            actual_idx = preview_count - (7 - t);
+                        }
+                        Tile tile = preview_tiles[actual_idx];
+                        int cp = (tile.number == 0) ? 5 : tile.color + 1;
+
+                        attron(COLOR_PAIR(cp) | A_BOLD);
+                        if (tile.number == 0) printw(":)");
+                        else printw("%2d", tile.number);
+                        attroff(COLOR_PAIR(cp) | A_BOLD);
+                    }
+                    attron(COLOR_PAIR(meld_border_pair));
+                    printw("│");
+                }
+
+                // Draw bottom border
+                mvprintw(start_r + 2, start_c, "└");
+                for (int t = 0; t < draw_count; t++) {
+                    if (t > 0) printw("┴");
+                    printw("──");
+                }
+                printw("┘");
+                attroff(COLOR_PAIR(meld_border_pair));
+            } else if (start_r == 13) {
+                // Show top border indicating there is a preview meld at row 13
+                attron(COLOR_PAIR(meld_border_pair));
+                mvprintw(13, start_c, "┌");
+                for (int t = 0; t < draw_count; t++) {
+                    if (t > 0) printw("┬");
+                    printw("──");
+                }
+                printw("┐");
+                attroff(COLOR_PAIR(meld_border_pair));
+            }
+        }
     }
 }
 
@@ -420,7 +749,7 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
     mvprintw(s, 2, "╔═════════════════════════════════════════════════════════════════════════════════════════════════╗");
     mvprintw(s + 5, 2, "╠═════════════════════════════════════════════════════════════════════════════════════════════════╣");
     mvprintw(s + 10, 2, "╚═════════════════════════════════════════════════════════════════════════════════════════════════╝");
-    
+
     // Draw the left and right vertical borders for the inner rows
     for (int r = 0; r < 2; r++) {
         for (int row_offset = 1; row_offset <= 4; row_offset++) {
@@ -546,6 +875,219 @@ bool play_selected_meld(int player_idx, Player *player, Table *table) {
     return false;
 }
 
+void open_debug_menu(Player *p1, Player *p2, Table *table, Deck *deck, int current_player, Player *active) {
+    // Clear entire screen to show clean menu
+    clear();
+    mvprintw(2, 5, "=== MENIU DEBUG ===");
+    mvprintw(4, 5, "1. Oferă formații valide în mână (Suită: R7-R8-R9, Terță: B5-Y5-B5_dup)");
+    mvprintw(5, 5, "2. Pune formații direct pe masa comună");
+    mvprintw(6, 5, "3. Pune un Joker în mână");
+    mvprintw(7, 5, "4. Golește masa comună");
+    mvprintw(8, 5, "5. Umple pachetul la loc (Reset Deck)");
+    mvprintw(9, 5, "6. Pune în mână piese ce pot fi lipite pe masa comună");
+    mvprintw(10, 5, "7. Închide meniul debug (Înapoi la joc)");
+    mvprintw(12, 5, "Alege o opțiune [1-7]: ");
+    refresh();
+
+    int ch = getch();
+    if (ch == '1') {
+        // Clear active board and hand first
+        for (int r = 0; r < 2; r++) {
+            for (int c = 0; c < 15; c++) {
+                boards[current_player][r][c].id = -1;
+                boards[current_player][r][c].number = -1;
+            }
+        }
+        
+        // Add Red 7, Red 8, Red 9
+        Tile t1 = { .id = 1000, .number = 7, .color = RED, .points = 5 };
+        Tile t2 = { .id = 1001, .number = 8, .color = RED, .points = 5 };
+        Tile t3 = { .id = 1002, .number = 9, .color = RED, .points = 5 };
+        
+        // Add Black 5, Yellow 5, Blue 5
+        Tile t4 = { .id = 1003, .number = 5, .color = BLACK, .points = 5 };
+        Tile t5 = { .id = 1004, .number = 5, .color = YELLOW, .points = 5 };
+        Tile t6 = { .id = 1005, .number = 5, .color = BLUE, .points = 5 };
+
+        boards[current_player][0][0] = t1;
+        boards[current_player][0][1] = t2;
+        boards[current_player][0][2] = t3;
+        boards[current_player][0][4] = t4;
+        boards[current_player][0][5] = t5;
+        boards[current_player][0][6] = t6;
+
+        sync_board_to_player(current_player, active);
+
+        mvprintw(13, 5, "Mână populată cu formații valide!");
+        refresh();
+        napms(1200);
+    } else if (ch == '2') {
+        // Add 6 pre-made melds to table for each player (6 * player_count total melds)
+        int total_to_add = 6 * player_count;
+        table->meld_count = 0; // Clear existing table melds first
+
+        Meld mock_melds[30];
+        
+        // 1. Blue Run: 10, 11, 12
+        mock_melds[0].count = 3;
+        mock_melds[0].tiles[0] = (Tile){ .id = 2000, .number = 10, .color = BLUE, .points = 10 };
+        mock_melds[0].tiles[1] = (Tile){ .id = 2001, .number = 11, .color = BLUE, .points = 10 };
+        mock_melds[0].tiles[2] = (Tile){ .id = 2002, .number = 12, .color = BLUE, .points = 10 };
+
+        // 2. Red Group: 4, Black 4, Yellow 4
+        mock_melds[1].count = 3;
+        mock_melds[1].tiles[0] = (Tile){ .id = 2003, .number = 4, .color = RED, .points = 5 };
+        mock_melds[1].tiles[1] = (Tile){ .id = 2004, .number = 4, .color = BLACK, .points = 5 };
+        mock_melds[1].tiles[2] = (Tile){ .id = 2005, .number = 4, .color = YELLOW, .points = 5 };
+
+        // 3. Red Run: 5, 6, 7
+        mock_melds[2].count = 3;
+        mock_melds[2].tiles[0] = (Tile){ .id = 2006, .number = 5, .color = RED, .points = 5 };
+        mock_melds[2].tiles[1] = (Tile){ .id = 2007, .number = 6, .color = RED, .points = 5 };
+        mock_melds[2].tiles[2] = (Tile){ .id = 2008, .number = 7, .color = RED, .points = 5 };
+
+        // 4. Black Group: 8, Blue 8, Yellow 8
+        mock_melds[3].count = 3;
+        mock_melds[3].tiles[0] = (Tile){ .id = 2009, .number = 8, .color = BLACK, .points = 8 };
+        mock_melds[3].tiles[1] = (Tile){ .id = 2010, .number = 8, .color = BLUE, .points = 8 };
+        mock_melds[3].tiles[2] = (Tile){ .id = 2011, .number = 8, .color = YELLOW, .points = 8 };
+
+        // 5. Black Run: 9, 10, 11
+        mock_melds[4].count = 3;
+        mock_melds[4].tiles[0] = (Tile){ .id = 2012, .number = 9, .color = BLACK, .points = 10 };
+        mock_melds[4].tiles[1] = (Tile){ .id = 2013, .number = 10, .color = BLACK, .points = 10 };
+        mock_melds[4].tiles[2] = (Tile){ .id = 2014, .number = 11, .color = BLACK, .points = 10 };
+
+        // 6. Red Group: 12, Black 12, Blue 12
+        mock_melds[5].count = 3;
+        mock_melds[5].tiles[0] = (Tile){ .id = 2015, .number = 12, .color = RED, .points = 10 };
+        mock_melds[5].tiles[1] = (Tile){ .id = 2016, .number = 12, .color = BLACK, .points = 10 };
+        mock_melds[5].tiles[2] = (Tile){ .id = 2017, .number = 12, .color = BLUE, .points = 10 };
+
+        // 7. Yellow Run: 1, 2, 3
+        mock_melds[6].count = 3;
+        mock_melds[6].tiles[0] = (Tile){ .id = 2018, .number = 1, .color = YELLOW, .points = 5 };
+        mock_melds[6].tiles[1] = (Tile){ .id = 2019, .number = 2, .color = YELLOW, .points = 5 };
+        mock_melds[6].tiles[2] = (Tile){ .id = 2020, .number = 3, .color = YELLOW, .points = 5 };
+
+        // 8. Black Group: 2, Blue 2, Red 2
+        mock_melds[7].count = 3;
+        mock_melds[7].tiles[0] = (Tile){ .id = 2021, .number = 2, .color = BLACK, .points = 5 };
+        mock_melds[7].tiles[1] = (Tile){ .id = 2022, .number = 2, .color = BLUE, .points = 5 };
+        mock_melds[7].tiles[2] = (Tile){ .id = 2023, .number = 2, .color = RED, .points = 5 };
+
+        // 9. Blue Run: 4, 5, 6
+        mock_melds[8].count = 3;
+        mock_melds[8].tiles[0] = (Tile){ .id = 2024, .number = 4, .color = BLUE, .points = 5 };
+        mock_melds[8].tiles[1] = (Tile){ .id = 2025, .number = 5, .color = BLUE, .points = 5 };
+        mock_melds[8].tiles[2] = (Tile){ .id = 2026, .number = 6, .color = BLUE, .points = 5 };
+
+        // 10. Yellow Group: 7, Black 7, Blue 7
+        mock_melds[9].count = 3;
+        mock_melds[9].tiles[0] = (Tile){ .id = 2027, .number = 7, .color = YELLOW, .points = 5 };
+        mock_melds[9].tiles[1] = (Tile){ .id = 2028, .number = 7, .color = BLACK, .points = 5 };
+        mock_melds[9].tiles[2] = (Tile){ .id = 2029, .number = 7, .color = BLUE, .points = 5 };
+
+        // Dynamically repeat patterns with offsets for larger player counts
+        for (int i = 10; i < 30; i++) {
+            int src_idx = i % 10;
+            mock_melds[i].count = 3;
+            for (int k = 0; k < 3; k++) {
+                mock_melds[i].tiles[k] = mock_melds[src_idx].tiles[k];
+                mock_melds[i].tiles[k].id = mock_melds[src_idx].tiles[k].id + (i / 10) * 1000;
+            }
+        }
+
+        // Copy into the table up to total_to_add or MAX_MELDS
+        for (int i = 0; i < total_to_add && table->meld_count < MAX_MELDS; i++) {
+            table->melds[table->meld_count++] = mock_melds[i];
+        }
+
+        // Enable initial meld bypass flags for both players
+        p1->has_melded = true;
+        p2->has_melded = true;
+
+        mvprintw(13, 5, "Adăugat %d formații pe masă! bypass etalare activat.", total_to_add);
+        refresh();
+        napms(1200);
+    } else if (ch == '3') {
+        // Give a Joker to hand
+        Tile joker = { .id = 3000, .number = 0, .color = JOKER_COLOR, .points = 50 };
+        add_tile_to_board(current_player, joker);
+        sync_board_to_player(current_player, active);
+
+        mvprintw(13, 5, "Joker adăugat în mână!");
+        refresh();
+        napms(1200);
+    } else if (ch == '4') {
+        table->meld_count = 0;
+        mvprintw(13, 5, "Masa comună a fost golită!");
+        refresh();
+        napms(1200);
+    } else if (ch == '5') {
+        init_deck(deck);
+        shuffle_deck(deck);
+        mvprintw(13, 5, "Pachetul de cărți a fost resetat și amestecat!");
+        refresh();
+        napms(1200);
+    } else if (ch == '6') {
+        if (table->meld_count == 0) {
+            mvprintw(14, 5, "Nu există formații pe masa comună la care să putem lipi!");
+        } else {
+            int added_count = 0;
+            for (int m = 0; m < table->meld_count; m++) {
+                Meld *meld = &table->melds[m];
+                if (is_valid_group(meld->tiles, meld->count)) {
+                    // Find missing color
+                    bool has_color[4] = {false, false, false, false};
+                    for (int i = 0; i < meld->count; i++) {
+                        if (meld->tiles[i].color >= 0 && meld->tiles[i].color < 4) {
+                            has_color[meld->tiles[i].color] = true;
+                        }
+                    }
+                    int missing_color = -1;
+                    for (int c = 0; c < 4; c++) {
+                        if (!has_color[c]) {
+                            missing_color = c;
+                            break;
+                        }
+                    }
+                    if (missing_color != -1) {
+                        Tile lipitura = { .id = 4000 + m * 10 + added_count, .number = meld->tiles[0].number, .color = missing_color, .points = meld->tiles[0].points };
+                        add_tile_to_board(current_player, lipitura);
+                        added_count++;
+                    }
+                } else if (is_valid_run(meld->tiles, meld->count)) {
+                    int color = meld->tiles[0].color;
+                    int min_num = meld->tiles[0].number;
+                    int max_num = meld->tiles[meld->count - 1].number;
+
+                    if (min_num > 1) {
+                        int num = min_num - 1;
+                        Tile lipitura = { .id = 4500 + m * 10 + added_count, .number = num, .color = color, .points = (num >= 10) ? 10 : 5 };
+                        add_tile_to_board(current_player, lipitura);
+                        added_count++;
+                    } else if (max_num < 14) {
+                        int num = max_num + 1;
+                        Tile lipitura = { .id = 4500 + m * 10 + added_count, .number = num, .color = color, .points = (num >= 10) ? 10 : 5 };
+                        add_tile_to_board(current_player, lipitura);
+                        added_count++;
+                    }
+                }
+            }
+            sync_board_to_player(current_player, active);
+            if (added_count > 0) {
+                mvprintw(14, 5, "Am adăugat %d piese de lipit în mână!", added_count);
+            } else {
+                mvprintw(14, 5, "Toate formațiile de pe masă sunt deja complete!");
+            }
+        }
+        refresh();
+        napms(1500);
+    }
+    clear();
+}
+
 int main() {
     init_game_ui();
 
@@ -580,6 +1122,7 @@ int main() {
     GameState state = STATE_PLAY;
     int running = 1;
     int quit_progress = 0;
+    int debug_progress = 0;
 
     // Movement state
     bool is_holding = false;
@@ -604,14 +1147,14 @@ int main() {
 
         // Render dynamic parts
         draw_header(&p1, &p2, current_player, state);
-        draw_shared_table(&table);
-        int disp_cursor = selecting_discard ? discard_cursor : 
-                          ((state == STATE_PLAY && cursor_r == -1) ? discard_count : (discard_count - 1));
-        int disp_view = selecting_discard ? discard_view_start : 
-                        ((state == STATE_PLAY && cursor_r == -1) ? 
-                         ((discard_count + 1 - 22 < 0) ? 0 : (discard_count + 1 - 22)) : 
-                         ((discard_count - 22 < 0) ? 0 : (discard_count - 22)));
-        bool disp_select = selecting_discard || (state == STATE_DRAW && !select_deck && !cursor_on_board_during_draw) || (state == STATE_PLAY && cursor_r == -1);
+        draw_shared_table(&table, is_holding, cursor_r, cursor_c, current_player, held_r, held_c);
+        int disp_cursor = selecting_discard ? discard_cursor :
+        ((state == STATE_PLAY && cursor_r == -1 && cursor_c == 14 && !meld_selection_mode) ? discard_count : (discard_count - 1));
+        int disp_view = selecting_discard ? discard_view_start :
+        ((state == STATE_PLAY && cursor_r == -1 && cursor_c == 14 && !meld_selection_mode) ?
+        ((discard_count + 1 - 22 < 0) ? 0 : (discard_count + 1 - 22)) :
+        ((discard_count - 22 < 0) ? 0 : (discard_count - 22)));
+        bool disp_select = selecting_discard || (state == STATE_DRAW && !select_deck && !cursor_on_board_during_draw) || (state == STATE_PLAY && cursor_r == -1 && cursor_c == 14 && !meld_selection_mode);
         draw_discard_pile(disp_cursor, disp_view, disp_select);
         draw_deck_piles(deck.size, (state == STATE_DRAW && !selecting_discard && select_deck && !cursor_on_board_during_draw));
         draw_board(current_player, cursor_r, cursor_c, is_holding, held_r, held_c, state);
@@ -633,13 +1176,23 @@ int main() {
             printw("[FAZA: JUCARE & DECARTARE] ");
             attroff(COLOR_PAIR(7) | A_BOLD);
             if (meld_selection_mode) {
-                printw(">> [SĂGEȚI] Navigare | [Z] Selectează | [X] Trimite Formație | [C] Mod Mișcare | [Scrie quit] Ieși << ");
+                if (cursor_r == -1) {
+                    printw(">> [Z] Trimite Formațiile selectate | [X]/[C] Înapoi pe tablă | [Scrie quit] Ieși << ");
+                } else {
+                    printw(">> [SĂGEȚI] Navigare | [Z] Selectează | [SUS] Trimite Formații (mergi la rândul -1) | [C] Mod Mișcare | [Scrie quit] Ieși << ");
+                }
             } else {
                 if (is_holding) {
                     if (cursor_r == -1) {
-                        printw(">> [Z] Confirmă Decartarea | [X] Renunță | [JOS] Înapoi pe tablă << ");
+                        if (cursor_c == 14) {
+                            printw(">> [Z] Decartează piesa | [X] Renunță | [JOS] Înapoi pe tablă << ");
+                        } else if (cursor_c < table.meld_count) {
+                            printw(">> [Z] Lipește piesa la formația selectată (verde) | [X] Renunță | [JOS] Înapoi pe tablă << ");
+                        } else {
+                            printw(">> [SĂGEȚI] Navigare (Coloana 14: Decartare, Stânga: formații) | [X] Renunță << ");
+                        }
                     } else {
-                        printw(">> [SĂGEȚI] Mută | [Z] Plasează | [X] Renunță | [SUS] Decartează (din rândul 0) << ");
+                        printw(">> [SĂGEȚI] Mută | [Z] Plasează | [X] Renunță | [SUS] Pune pe masă/Decartează << ");
                     }
                 } else {
                     printw(">> [SĂGEȚI] Navigare | [Z] Apucă piesa | [C] Mod Formații | [Scrie quit] Ieși << ");
@@ -657,7 +1210,7 @@ int main() {
         mvprintw(39, 5, "LEGENDA PERMANENTĂ:  [SĂGEȚI] Navigare   |   [Z] Acțiune (Selectare/Trage/Mută)   |   [X] Renunță/Decartează   |   [C] Mod Formații");
         attroff(COLOR_PAIR(6) | A_BOLD);
 
-        // Draw quit progress banner or empty spacing on Row 38
+        // Draw quit or debug progress banner or empty spacing on Row 38
         mvprintw(38, 0, "                                                                                                      ");
         if (quit_progress > 0) {
             char progress_str[5] = "";
@@ -665,6 +1218,13 @@ int main() {
             else if (quit_progress == 2) strcpy(progress_str, "qu");
             else if (quit_progress == 3) strcpy(progress_str, "qui");
             mvprintw(38, 5, "Ieșire: %s...", progress_str);
+        } else if (debug_progress > 0) {
+            char debug_str[10] = "";
+            if (debug_progress == 1) strcpy(debug_str, "d");
+            else if (debug_progress == 2) strcpy(debug_str, "de");
+            else if (debug_progress == 3) strcpy(debug_str, "deb");
+            else if (debug_progress == 4) strcpy(debug_str, "debu");
+            mvprintw(38, 5, "Debug: %s...", debug_str);
         }
 
         refresh();
@@ -672,20 +1232,45 @@ int main() {
 
         if (ch == 'q' || ch == 'Q') {
             quit_progress = 1;
+            debug_progress = 0;
         } else if (ch == 'u' || ch == 'U') {
             if (quit_progress == 1) quit_progress = 2;
             else quit_progress = 0;
+            if (debug_progress == 3) debug_progress = 4;
+            else debug_progress = 0;
         } else if (ch == 'i' || ch == 'I') {
             if (quit_progress == 2) quit_progress = 3;
             else quit_progress = 0;
+            debug_progress = 0;
         } else if (ch == 't' || ch == 'T') {
             if (quit_progress == 3) {
                 running = 0;
             } else {
                 quit_progress = 0;
             }
+            debug_progress = 0;
+        } else if (ch == 'd' || ch == 'D') {
+            debug_progress = 1;
+            quit_progress = 0;
+        } else if (ch == 'e' || ch == 'E') {
+            if (debug_progress == 1) debug_progress = 2;
+            else debug_progress = 0;
+            quit_progress = 0;
+        } else if (ch == 'b' || ch == 'B') {
+            if (debug_progress == 2) debug_progress = 3;
+            else debug_progress = 0;
+            quit_progress = 0;
+        } else if (ch == 'g' || ch == 'G') {
+            if (debug_progress == 4) {
+                open_debug_menu(&p1, &p2, &table, &deck, current_player, active);
+                debug_progress = 0;
+            } else {
+                debug_progress = 0;
+            }
+            quit_progress = 0;
         } else {
             quit_progress = 0;
+            debug_progress = 0;
         }
 
         if (state == STATE_DRAW) {
@@ -708,16 +1293,16 @@ int main() {
                     }
                 } else if (ch == 'z' || ch == 'Z') {
                     // Draw selected card and all cards to the right of it
-                    
+
                     // If the slot is occupied but stack is empty, push the existing card to the stack first
                     if (board_stack_count[current_player] == 0 && boards[current_player][0][14].id != -1) {
                         board_stack[current_player][board_stack_count[current_player]++] = boards[current_player][0][14];
                     }
-                    
+
                     for (int i = discard_cursor; i < discard_count; i++) {
                         board_stack[current_player][board_stack_count[current_player]++] = discard_pile[i];
                     }
-                    
+
                     boards[current_player][0][14] = board_stack[current_player][board_stack_count[current_player] - 1];
                     discard_count = discard_cursor;
                     sync_board_to_player(current_player, active);
@@ -728,6 +1313,9 @@ int main() {
                     cursor_c = 14;
                 } else if (ch == 'x' || ch == 'X') {
                     selecting_discard = false;
+                    cursor_on_board_during_draw = true;
+                    cursor_r = 0;
+                    cursor_c = 0;
                 }
             } else if (cursor_on_board_during_draw) {
                 if (ch == KEY_LEFT) {
@@ -824,6 +1412,10 @@ int main() {
                         select_deck = true;
                         saved_select_deck[current_player] = true;
                     }
+                } else if (ch == 'x' || ch == 'X') {
+                    cursor_on_board_during_draw = true;
+                    cursor_r = 0;
+                    cursor_c = 0;
                 } else if (ch == 'z' || ch == 'Z') {
                     if (select_deck) {
                         int prev = active->tile_count;
@@ -881,39 +1473,261 @@ int main() {
             if (meld_selection_mode) {
                 // Meld Selection Mode
                 if (ch == KEY_LEFT) {
-                    if (cursor_c > 0) cursor_c--;
-                    else cursor_c = 14;
-                } else if (ch == KEY_RIGHT) {
-                    if (cursor_c < 14) cursor_c++;
-                    else cursor_c = 0;
-                } else if (ch == KEY_UP && cursor_r > 0) {
-                    cursor_r--;
-                } else if (ch == KEY_DOWN && cursor_r < 1) {
-                    cursor_r++;
-                } else if (ch == 'z' || ch == 'Z') {
-                    // Z toggles selection of tile under cursor.
-                    // If pressed on an empty space, clear all selections.
-                    if (boards[current_player][cursor_r][cursor_c].id == -1) {
-                        for (int r = 0; r < 2; r++) {
-                            for (int c = 0; c < 15; c++) {
-                                selected_tiles[current_player][r][c] = false;
+                    if (cursor_r == -1) {
+                        if (cursor_c == 14) {
+                            attach_side = 0;
+                        } else {
+                            typedef struct {
+                                int meld_idx;
+                                int side;
+                            } AttachTarget;
+                            AttachTarget targets[8];
+                            int target_count = 0;
+                            int row_idx = cursor_c / 4;
+                            int start_meld = row_idx * 4;
+                            int end_meld = start_meld + 3;
+                            if (end_meld >= table.meld_count) end_meld = table.meld_count - 1;
+
+                            for (int m = start_meld; m <= end_meld; m++) {
+                                targets[target_count++] = (AttachTarget){ .meld_idx = m, .side = 0 };
+                                targets[target_count++] = (AttachTarget){ .meld_idx = m, .side = 1 };
+                            }
+
+                            if (target_count > 0) {
+                                int curr_idx = -1;
+                                for (int i = 0; i < target_count; i++) {
+                                    if (targets[i].meld_idx == cursor_c && targets[i].side == attach_side) {
+                                        curr_idx = i;
+                                        break;
+                                    }
+                                }
+                                if (curr_idx != -1) {
+                                    int next_idx = (curr_idx - 1 + target_count) % target_count;
+                                    cursor_c = targets[next_idx].meld_idx;
+                                    attach_side = targets[next_idx].side;
+                                }
                             }
                         }
                     } else {
-                        selected_tiles[current_player][cursor_r][cursor_c] = !selected_tiles[current_player][cursor_r][cursor_c];
+                        if (cursor_c > 0) cursor_c--;
+                        else cursor_c = 14;
+                    }
+                } else if (ch == KEY_RIGHT) {
+                    if (cursor_r == -1) {
+                        if (cursor_c == 14) {
+                            attach_side = 0;
+                        } else {
+                            typedef struct {
+                                int meld_idx;
+                                int side;
+                            } AttachTarget;
+                            AttachTarget targets[8];
+                            int target_count = 0;
+                            int row_idx = cursor_c / 4;
+                            int start_meld = row_idx * 4;
+                            int end_meld = start_meld + 3;
+                            if (end_meld >= table.meld_count) end_meld = table.meld_count - 1;
+
+                            for (int m = start_meld; m <= end_meld; m++) {
+                                targets[target_count++] = (AttachTarget){ .meld_idx = m, .side = 0 };
+                                targets[target_count++] = (AttachTarget){ .meld_idx = m, .side = 1 };
+                            }
+
+                            if (target_count > 0) {
+                                int curr_idx = -1;
+                                for (int i = 0; i < target_count; i++) {
+                                    if (targets[i].meld_idx == cursor_c && targets[i].side == attach_side) {
+                                        curr_idx = i;
+                                        break;
+                                    }
+                                }
+                                if (curr_idx != -1) {
+                                    int next_idx = (curr_idx + 1) % target_count;
+                                    cursor_c = targets[next_idx].meld_idx;
+                                    attach_side = targets[next_idx].side;
+                                }
+                            }
+                        }
+                    } else {
+                        if (cursor_c < 14) cursor_c++;
+                        else cursor_c = 0;
+                    }
+                } else if (ch == KEY_UP) {
+                    if (cursor_r == 1) {
+                        cursor_r = 0;
+                    } else if (cursor_r == 0) {
+                        int selected_count = 0;
+                        for (int r = 0; r < 2; r++) {
+                            for (int c = 0; c < 15; c++) {
+                                if (selected_tiles[current_player][r][c] && boards[current_player][r][c].id != -1) {
+                                    selected_count++;
+                                }
+                            }
+                        }
+
+                        if (selected_count == 1) {
+                            if (table.meld_count > 0) {
+                                cursor_r = -1;
+                                int bottom_row = (table.meld_count - 1) / 4;
+                                cursor_c = bottom_row * 4;
+                                attach_side = 0;
+                            } else {
+                                mvprintw(38, 5, "Nu există formații pe masa comună!                 ");
+                                refresh();
+                                napms(1200);
+                                mvprintw(38, 5, "                                                   ");
+                            }
+                        } else if (selected_count > 1) {
+                            cursor_r = -1;
+                            int bottom_row = (table.meld_count - 1) / 4;
+                            cursor_c = bottom_row * 4;
+                        } else {
+                            // Nothing selected: Go to Discard Pile
+                            cursor_r = -1;
+                            cursor_c = 14;
+                            attach_side = 0;
+                        }
+                    } else if (cursor_r == -1) {
+                        if (cursor_c == 14) {
+                            // From Discard Pile: go to the bottom row of the Common Table
+                            int selected_count = 0;
+                            for (int r = 0; r < 2; r++) {
+                                for (int c = 0; c < 15; c++) {
+                                    if (selected_tiles[current_player][r][c] && boards[current_player][r][c].id != -1) {
+                                        selected_count++;
+                                    }
+                                }
+                            }
+                            if (selected_count == 0) {
+                                if (table.meld_count > 0) {
+                                    int bottom_row = (table.meld_count - 1) / 4;
+                                    cursor_c = bottom_row * 4;
+                                    attach_side = 0;
+                                }
+                            }
+                        } else {
+                            // In Common Table: move UP one row
+                            int current_row = cursor_c / 4;
+                            if (current_row > 0) {
+                                int target_col = (current_row - 1) * 4 + (cursor_c % 4);
+                                if (target_col >= table.meld_count) {
+                                    target_col = table.meld_count - 1;
+                                }
+                                cursor_c = target_col;
+                            }
+                        }
+                    }
+                } else if (ch == KEY_DOWN) {
+                    if (cursor_r == -1) {
+                        int selected_count = 0;
+                        for (int r = 0; r < 2; r++) {
+                            for (int c = 0; c < 15; c++) {
+                                if (selected_tiles[current_player][r][c] && boards[current_player][r][c].id != -1) {
+                                    selected_count++;
+                                }
+                            }
+                        }
+                        if (selected_count == 0) {
+                            if (cursor_c < 14) {
+                                int current_row = cursor_c / 4;
+                                int bottom_row = (table.meld_count - 1) / 4;
+                                if (current_row < bottom_row) {
+                                    int target_col = (current_row + 1) * 4 + (cursor_c % 4);
+                                    if (target_col >= table.meld_count) {
+                                        target_col = table.meld_count - 1;
+                                    }
+                                    cursor_c = target_col;
+                                } else {
+                                    // Down from bottom row goes to Discard Pile
+                                    cursor_c = 14;
+                                }
+                            } else {
+                                // Down from Discard Pile goes to private board
+                                cursor_r = 0;
+                            }
+                        } else {
+                            if (cursor_c < 14) {
+                                int current_row = cursor_c / 4;
+                                int bottom_row = (table.meld_count - 1) / 4;
+                                if (current_row < bottom_row) {
+                                    int target_col = (current_row + 1) * 4 + (cursor_c % 4);
+                                    if (target_col >= table.meld_count) {
+                                        target_col = table.meld_count - 1;
+                                    }
+                                    cursor_c = target_col;
+                                } else {
+                                    cursor_r = 0;
+                                }
+                            } else {
+                                cursor_r = 0;
+                            }
+                        }
+                    } else if (cursor_r == 0) {
+                        cursor_r = 1;
+                    }
+                } else if (ch == 'z' || ch == 'Z') {
+                    if (cursor_r == -1) {
+                        int selected_count = 0;
+                        int sel_r = -1, sel_c = -1;
+                        for (int r = 0; r < 2; r++) {
+                            for (int c = 0; c < 15; c++) {
+                                if (selected_tiles[current_player][r][c] && boards[current_player][r][c].id != -1) {
+                                    selected_count++;
+                                    sel_r = r;
+                                    sel_c = c;
+                                }
+                            }
+                        }
+
+                        if (selected_count == 1) {
+                            Tile tile = boards[current_player][sel_r][sel_c];
+                            if (can_attach_tile_to_side(&table.melds[cursor_c], tile, attach_side)) {
+                                if (attach_tile_to_meld_side(&table, cursor_c, tile, attach_side)) {
+                                    boards[current_player][sel_r][sel_c].id = -1;
+                                    boards[current_player][sel_r][sel_c].number = -1;
+                                    selected_tiles[current_player][sel_r][sel_c] = false;
+                                    sync_board_to_player(current_player, active);
+                                    cursor_r = 0;
+                                    mvprintw(38, 5, "Lipitură reușită!                               ");
+                                } else {
+                                    mvprintw(38, 5, "Mutare invalidă pentru această parte a formației!");
+                                }
+                            } else {
+                                mvprintw(38, 5, "Mutare invalidă pentru această parte a formației!");
+                            }
+                            refresh();
+                            napms(1200);
+                            mvprintw(38, 5, "                                                                        ");
+                        } else {
+                            // Z at row -1 plays the selected meld (count > 1)
+                            if (play_selected_meld(current_player, active, &table)) {
+                                mvprintw(38, 5, "Formație jucată cu succes!");
+                                refresh();
+                                napms(1200);
+                                mvprintw(38, 5, "                           ");
+                                cursor_r = 0;
+                            } else {
+                                mvprintw(38, 5, "Formație invalidă! Trebuie să fie suită sau terță validă (min. 3 piese).");
+                                refresh();
+                                napms(1500);
+                                mvprintw(38, 5, "                                                                        ");
+                            }
+                        }
+                    } else {
+                        // Z toggles selection of tile under cursor only if there is a tile there.
+                        if (boards[current_player][cursor_r][cursor_c].id != -1) {
+                            selected_tiles[current_player][cursor_r][cursor_c] = !selected_tiles[current_player][cursor_r][cursor_c];
+                        }
                     }
                 } else if (ch == 'x' || ch == 'X') {
-                    // X sends/plays the meld
-                    if (play_selected_meld(current_player, active, &table)) {
-                        mvprintw(38, 5, "Formație jucată cu succes!");
-                        refresh();
-                        napms(1200);
-                        mvprintw(38, 5, "                           ");
-                    } else {
-                        mvprintw(38, 5, "Formație invalidă! Trebuie să fie suită sau terță validă (min. 3 piese).");
-                        refresh();
-                        napms(1500);
-                        mvprintw(38, 5, "                                                                        ");
+                    // X deselects everything in meld selection mode
+                    for (int r = 0; r < 2; r++) {
+                        for (int c = 0; c < 15; c++) {
+                            selected_tiles[current_player][r][c] = false;
+                        }
+                    }
+                    if (cursor_r == -1) {
+                        cursor_r = 0;
                     }
                 } else if (ch == 'c' || ch == 'C') {
                     // C switches back to movement mode and cancels all selections
@@ -923,64 +1737,230 @@ int main() {
                             selected_tiles[current_player][r][c] = false;
                         }
                     }
+                    if (cursor_r == -1) {
+                        cursor_r = 0;
+                    }
                 }
             } else {
                 // Movement Mode
-                if (ch == KEY_LEFT && cursor_r >= 0) {
-                    if (cursor_c > 0) cursor_c--;
-                    else cursor_c = 14;
-                } else if (ch == KEY_RIGHT && cursor_r >= 0) {
-                    if (cursor_c < 14) cursor_c++;
-                    else cursor_c = 0;
+                if (ch == KEY_LEFT && cursor_r >= -1) {
+                    if (cursor_r == -1) {
+                        if (cursor_c == 14) {
+                            attach_side = 0;
+                        } else {
+                            typedef struct {
+                                int meld_idx;
+                                int side;
+                            } AttachTarget;
+                            AttachTarget targets[8];
+                            int target_count = 0;
+                            int row_idx = cursor_c / 4;
+                            int start_meld = row_idx * 4;
+                            int end_meld = start_meld + 3;
+                            if (end_meld >= table.meld_count) end_meld = table.meld_count - 1;
+
+                            for (int m = start_meld; m <= end_meld; m++) {
+                                targets[target_count++] = (AttachTarget){ .meld_idx = m, .side = 0 };
+                                targets[target_count++] = (AttachTarget){ .meld_idx = m, .side = 1 };
+                            }
+
+                            if (target_count > 0) {
+                                int curr_idx = -1;
+                                for (int i = 0; i < target_count; i++) {
+                                    if (targets[i].meld_idx == cursor_c && targets[i].side == attach_side) {
+                                        curr_idx = i;
+                                        break;
+                                    }
+                                }
+                                if (curr_idx != -1) {
+                                    int next_idx = (curr_idx - 1 + target_count) % target_count;
+                                    cursor_c = targets[next_idx].meld_idx;
+                                    attach_side = targets[next_idx].side;
+                                }
+                            }
+                        }
+                    } else {
+                        if (cursor_c > 0) cursor_c--;
+                        else cursor_c = 14;
+                    }
+                } else if (ch == KEY_RIGHT && cursor_r >= -1) {
+                    if (cursor_r == -1) {
+                        if (cursor_c == 14) {
+                            attach_side = 0;
+                        } else {
+                            typedef struct {
+                                int meld_idx;
+                                int side;
+                            } AttachTarget;
+                            AttachTarget targets[8];
+                            int target_count = 0;
+                            int row_idx = cursor_c / 4;
+                            int start_meld = row_idx * 4;
+                            int end_meld = start_meld + 3;
+                            if (end_meld >= table.meld_count) end_meld = table.meld_count - 1;
+
+                            for (int m = start_meld; m <= end_meld; m++) {
+                                targets[target_count++] = (AttachTarget){ .meld_idx = m, .side = 0 };
+                                targets[target_count++] = (AttachTarget){ .meld_idx = m, .side = 1 };
+                            }
+
+                            if (target_count > 0) {
+                                int curr_idx = -1;
+                                for (int i = 0; i < target_count; i++) {
+                                    if (targets[i].meld_idx == cursor_c && targets[i].side == attach_side) {
+                                        curr_idx = i;
+                                        break;
+                                    }
+                                }
+                                if (curr_idx != -1) {
+                                    int next_idx = (curr_idx + 1) % target_count;
+                                    cursor_c = targets[next_idx].meld_idx;
+                                    attach_side = targets[next_idx].side;
+                                }
+                            }
+                        }
+                    } else {
+                        if (cursor_c < 14) cursor_c++;
+                        else cursor_c = 0;
+                    }
                 } else if (ch == KEY_UP) {
                     if (cursor_r == 1) {
                         cursor_r = 0;
-                    } else if (cursor_r == 0 && is_holding) {
-                        cursor_r = -1;
+                    } else if (cursor_r == 0) {
+                        if (is_holding) {
+                            cursor_r = -1;
+                            if (table.meld_count > 0) {
+                                int bottom_row = (table.meld_count - 1) / 4;
+                                cursor_c = bottom_row * 4;
+                                attach_side = 0;
+                            } else {
+                                cursor_c = 14;
+                                attach_side = 0;
+                            }
+                        } else {
+                            // Not holding: Go to Discard Pile
+                            cursor_r = -1;
+                            cursor_c = 14;
+                            attach_side = 0;
+                        }
+                    } else if (cursor_r == -1) {
+                        if (cursor_c == 14) {
+                            if (table.meld_count > 0) {
+                                int bottom_row = (table.meld_count - 1) / 4;
+                                cursor_c = bottom_row * 4;
+                                attach_side = 0;
+                            }
+                        } else {
+                            // In Common Table: move UP one row
+                            int current_row = cursor_c / 4;
+                            if (current_row > 0) {
+                                int target_col = (current_row - 1) * 4 + (cursor_c % 4);
+                                if (target_col >= table.meld_count) {
+                                    target_col = table.meld_count - 1;
+                                }
+                                cursor_c = target_col;
+                            }
+                        }
                     }
                 } else if (ch == KEY_DOWN) {
                     if (cursor_r == -1) {
-                        cursor_r = 0;
+                        if (is_holding) {
+                            if (cursor_c < 14) {
+                                int current_row = cursor_c / 4;
+                                int bottom_row = (table.meld_count - 1) / 4;
+                                if (current_row < bottom_row) {
+                                    int target_col = (current_row + 1) * 4 + (cursor_c % 4);
+                                    if (target_col >= table.meld_count) {
+                                        target_col = table.meld_count - 1;
+                                    }
+                                    cursor_c = target_col;
+                                } else {
+                                    cursor_c = 14;
+                                }
+                            } else {
+                                cursor_r = 0;
+                                cursor_c = held_c; // Restore position of the grabbed tile
+                            }
+                        } else {
+                            if (cursor_c < 14) {
+                                int current_row = cursor_c / 4;
+                                int bottom_row = (table.meld_count - 1) / 4;
+                                if (current_row < bottom_row) {
+                                    int target_col = (current_row + 1) * 4 + (cursor_c % 4);
+                                    if (target_col >= table.meld_count) {
+                                        target_col = table.meld_count - 1;
+                                    }
+                                    cursor_c = target_col;
+                                } else {
+                                    cursor_c = 14;
+                                }
+                            } else {
+                                cursor_r = 0;
+                            }
+                        }
                     } else if (cursor_r == 0) {
                         cursor_r = 1;
                     }
                 } else if (ch == 'z' || ch == 'Z') {
                     if (cursor_r == -1) {
-                        // Discard the held card!
-                        discard_pile[discard_count++] = boards[current_player][held_r][held_c];
-                        boards[current_player][held_r][held_c].id = -1;
-                        boards[current_player][held_r][held_c].number = -1;
-                        sync_board_to_player(current_player, active);
+                        if (cursor_c == 14) {
+                            // Discard the held card!
+                            discard_pile[discard_count++] = boards[current_player][held_r][held_c];
+                            boards[current_player][held_r][held_c].id = -1;
+                            boards[current_player][held_r][held_c].number = -1;
+                            sync_board_to_player(current_player, active);
 
-                        // Check win condition
-                        if (active->tile_count == 0) {
-                            clear();
-                            mvprintw(15, 20, "FELICITĂRI! Jucătorul %d a câștigat jocul!", current_player + 1);
-                            mvprintw(17, 20, "Apasă orice tastă pentru a ieși...");
-                            refresh();
-                            getch();
-                            running = 0;
-                        } else {
-                            int save_r = (cursor_r >= 0) ? cursor_r : 0;
-                            saved_board_r[current_player] = save_r;
-                            saved_board_c[current_player] = cursor_c;
+                            // Check win condition
+                            if (active->tile_count == 0) {
+                                clear();
+                                mvprintw(15, 20, "FELICITĂRI! Jucătorul %d a câștigat jocul!", current_player + 1);
+                                mvprintw(17, 20, "Apasă orice tastă pentru a ieși...");
+                                refresh();
+                                getch();
+                                running = 0;
+                            } else {
+                                int save_r = (cursor_r >= 0) ? cursor_r : 0;
+                                saved_board_r[current_player] = save_r;
+                                saved_board_c[current_player] = cursor_c;
 
-                            current_player = 1 - current_player;
-                            cursor_r = 0;
-                            cursor_c = 0;
-                            state = STATE_DRAW;
-                            select_deck = true;
-                            meld_selection_mode = false;
-                            is_holding = false;
-                            held_r = -1;
-                            held_c = -1;
-                            for (int p = 0; p < 2; p++) {
-                                for (int r = 0; r < 2; r++) {
-                                    for (int c = 0; c < 15; c++) {
-                                        selected_tiles[p][r][c] = false;
+                                current_player = 1 - current_player;
+                                cursor_r = 0;
+                                cursor_c = 0;
+                                state = STATE_DRAW;
+                                select_deck = true;
+                                meld_selection_mode = false;
+                                is_holding = false;
+                                held_r = -1;
+                                held_c = -1;
+                                for (int p = 0; p < 2; p++) {
+                                    for (int r = 0; r < 2; r++) {
+                                        for (int c = 0; c < 15; c++) {
+                                            selected_tiles[p][r][c] = false;
+                                        }
                                     }
                                 }
                             }
+                        } else if (cursor_c < table.meld_count) {
+                            Tile tile = boards[current_player][held_r][held_c];
+                            if (can_attach_tile_to_side(&table.melds[cursor_c], tile, attach_side)) {
+                                if (attach_tile_to_meld_side(&table, cursor_c, tile, attach_side)) {
+                                    boards[current_player][held_r][held_c].id = -1;
+                                    boards[current_player][held_r][held_c].number = -1;
+                                    sync_board_to_player(current_player, active);
+                                    is_holding = false;
+                                    held_r = -1;
+                                    held_c = -1;
+                                    cursor_r = 0;
+                                    mvprintw(38, 5, "Lipitură reușită!                               ");
+                                } else {
+                                    mvprintw(38, 5, "Mutare invalidă pentru această parte a formației!");
+                                }
+                            } else {
+                                mvprintw(38, 5, "Mutare invalidă pentru această parte a formației!");
+                            }
+                            refresh();
+                            napms(1200);
+                            mvprintw(38, 5, "                                                                        ");
                         }
                     } else {
                         if (!is_holding) {
@@ -1008,9 +1988,14 @@ int main() {
                     }
                 } else if (ch == 'x' || ch == 'X') {
                     if (is_holding) {
+                        if (cursor_r == -1) {
+                            cursor_r = 0;
+                            cursor_c = held_c;
+                        }
                         is_holding = false;
                         held_r = -1;
                         held_c = -1;
+                    } else {
                         if (cursor_r == -1) {
                             cursor_r = 0;
                         }
@@ -1040,7 +2025,7 @@ int main() {
             } else if (ch == 'z' || ch == 'Z') {
                 if (boards[current_player][cursor_r][cursor_c].id != -1) {
                     discard_tile_from_board(current_player, active, cursor_r, cursor_c);
-                    
+
                     // Check win condition
                     if (active->tile_count == 0) {
                         clear();
