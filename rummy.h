@@ -40,6 +40,8 @@ typedef struct {
     Tile hand[20];
     int tile_count;
     bool has_melded;
+    bool drew_from_discard_this_turn;
+    Tile primary_discard_drawn_tile;
 } Player;
 
 // O singură formație de pe masă (suită sau grup)
@@ -101,5 +103,8 @@ bool has_player_won(Player *player);
 
 // Eliminarea pieselor specifice din mâna jucătorului (când le pune pe masă)
 void remove_tiles_from_hand(Player *player, int indices[], int num_indices);
+
+// Validarea regulilor pentru tragerea din decartare
+bool validate_discard_rules(Player *player);
 
 #endif
