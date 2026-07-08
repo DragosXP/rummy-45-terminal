@@ -40,6 +40,10 @@ typedef struct {
     Tile hand[20];
     int tile_count;
     bool has_melded;
+    
+    // NOU: Urmarirea regulilor pentru tragerea din teancul de decartare
+    bool drew_from_discard_this_turn;
+    Tile primary_discard_drawn_tile;
 } Player;
 
 // O singură formație de pe masă (suită sau grup)
@@ -71,6 +75,9 @@ bool is_valid_group(Tile tiles[], int count);
 bool is_valid_run(Tile tiles[], int count);
 bool is_valid_meld(Tile tiles[], int count);
 
+// Funcție folosită de main.c pentru a sorta vizual o suită pe masă
+void sort_run(Tile tiles[], int count);
+
 // Operațiunile mesei (Table operations)
 void init_table(Table *table);
 bool place_meld(Table *table, Tile tiles[], int count);
@@ -101,5 +108,9 @@ bool has_player_won(Player *player);
 
 // Eliminarea pieselor specifice din mâna jucătorului (când le pune pe masă)
 void remove_tiles_from_hand(Player *player, int indices[], int num_indices);
+
+// NOU: Funcții de verificare a regulilor pentru teancul de decartare
+bool is_tile_in_hand(const Player *player, int tile_id);
+bool validate_discard_rules(const Player *player);
 
 #endif

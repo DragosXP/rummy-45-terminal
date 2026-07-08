@@ -60,6 +60,10 @@ void deal_hands(Deck *deck, Player *p1, Player *p2) {
     p2->tile_count = 0;
     p1->has_melded = false;
     p2->has_melded = false;
+    
+    // NOU: Resetare flag-uri pentru extragerea de pe masa
+    p1->drew_from_discard_this_turn = false;
+    p2->drew_from_discard_this_turn = false;
 
     // Deal 14 tiles alternating
     for (int i = 0; i < 14; i++) {
@@ -208,6 +212,19 @@ bool is_valid_run(Tile tiles[], int count) {
 
 bool is_valid_meld(Tile tiles[], int count) {
     return is_valid_group(tiles, count) || is_valid_run(tiles, count);
+}
+
+void sort_run(Tile tiles[], int count) {
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = 0; j < count - i - 1; j++) {
+            // Sortare simplă crescătoare (fără să stricăm Jokerii)
+            if (tiles[j].number > tiles[j+1].number) {
+                Tile temp = tiles[j];
+                tiles[j] = tiles[j+1];
+                tiles[j+1] = temp;
+            }
+        }
+    }
 }
 
 void init_table(Table *table) {
@@ -409,6 +426,11 @@ bool play_lipitura(Player *player, Table *table, int meld_index, int hand_index)
 
     Tile tile_to_play = player->hand[hand_index];
 
+    // REGULA TA SPECIFICĂ: Interzicem folosirea piesei de bază luate de jos la lipituri!
+    if (player->drew_from_discard_this_turn && tile_to_play.id == player->primary_discard_drawn_tile.id) {
+        return false; 
+    }
+
     if (add_tile_to_meld(table, meld_index, tile_to_play)) {
         int indices_to_remove[1] = {hand_index};
         remove_tiles_from_hand(player, indices_to_remove, 1);
@@ -417,92 +439,23 @@ bool play_lipitura(Player *player, Table *table, int meld_index, int hand_index)
     return false; 
 }
 
-void sort_run(Tile tiles[], int count) {
-    if (count < 2) return;
+// ====================================================================
+// NOU: FUNCTII DE VALIDARE EXTRAGERE DECARTARE PENTRU MAIN
+// ====================================================================
 
-    // 1. Detect if we have 13 and 1 in the run
-    bool has_13 = false;
-    bool has_1 = false;
-    for (int i = 0; i < count; i++) {
-        if (tiles[i].number == 13) has_13 = true;
-        if (tiles[i].number == 1) has_1 = true;
+bool is_tile_in_hand(const Player *player, int tile_id) {
+    for (int i = 0; i < player->tile_count; i++) {
+        if (player->hand[i].id == tile_id) return true;
     }
-    bool ace_high = (has_13 && has_1);
+    return false;
+}
 
-    // 2. Extract non-jokers and sort them to find gaps/extremes
-    int non_jokers[15];
-    int nj_count = 0;
-    int first_nj_orig_idx = -1;
-    for (int i = 0; i < count; i++) {
-        if (tiles[i].number != 0) {
-            if (first_nj_orig_idx == -1) {
-                first_nj_orig_idx = i;
-            }
-            int val = tiles[i].number;
-            if (val == 1 && ace_high) {
-                val = 14;
-            }
-            non_jokers[nj_count++] = val;
+// Întoarce true dacă regulile sunt respectate, false dacă piesa extrasă e încă în mână
+bool validate_discard_rules(const Player *player) {
+    if (player->drew_from_discard_this_turn) {
+        if (is_tile_in_hand(player, player->primary_discard_drawn_tile.id)) {
+            return false; 
         }
     }
-
-    // Sort non-jokers ascending (Bubble Sort)
-    for (int i = 0; i < nj_count - 1; i++) {
-        for (int j = 0; j < nj_count - i - 1; j++) {
-            if (non_jokers[j] > non_jokers[j+1]) {
-                int temp = non_jokers[j];
-                non_jokers[j] = non_jokers[j+1];
-                non_jokers[j+1] = temp;
-            }
-        }
-    }
-
-    // 3. Compute sort values for each tile
-    int sort_vals[15];
-    for (int i = 0; i < count; i++) {
-        if (tiles[i].number != 0) {
-            int val = tiles[i].number;
-            if (val == 1 && ace_high) {
-                val = 14;
-            }
-            sort_vals[i] = val;
-        } else {
-            // It's a Joker (number == 0)
-            int joker_val = 1;
-            if (nj_count > 0) {
-                int gap_idx = -1;
-                for (int k = 0; k < nj_count - 1; k++) {
-                    if (non_jokers[k+1] - non_jokers[k] == 2) {
-                        gap_idx = k;
-                        break;
-                    }
-                }
-                if (gap_idx != -1) {
-                    joker_val = non_jokers[gap_idx] + 1;
-                } else {
-                    if (i < first_nj_orig_idx) {
-                        joker_val = non_jokers[0] - 1;
-                    } else {
-                        joker_val = non_jokers[nj_count - 1] + 1;
-                    }
-                }
-            }
-            sort_vals[i] = joker_val;
-        }
-    }
-
-    // 4. Sort tiles array based on sort_vals using Bubble Sort
-    for (int i = 0; i < count - 1; i++) {
-        for (int j = 0; j < count - i - 1; j++) {
-            if (sort_vals[j] > sort_vals[j+1]) {
-                int temp_val = sort_vals[j];
-                sort_vals[j] = sort_vals[j+1];
-                sort_vals[j+1] = temp_val;
-                
-                Tile temp_tile = tiles[j];
-                tiles[j] = tiles[j+1];
-                tiles[j+1] = temp_tile;
-            }
-        }
-    }
+    return true; 
 }
