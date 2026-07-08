@@ -73,6 +73,9 @@ bool is_valid_group(Tile tiles[], int count);
 bool is_valid_run(Tile tiles[], int count);
 bool is_valid_meld(Tile tiles[], int count);
 
+// Funcție folosită de main.c pentru a sorta vizual o suită pe masă
+void sort_run(Tile tiles[], int count);
+
 // Operațiunile mesei (Table operations)
 void init_table(Table *table);
 bool place_meld(Table *table, Tile tiles[], int count);
