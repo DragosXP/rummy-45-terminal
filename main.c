@@ -1355,6 +1355,10 @@ int main() {
                         }
                     }
                 } else if (ch == 'z' || ch == 'Z') {
+                    if (discard_count <= 0 || discard_cursor < 0 || discard_cursor >= discard_count) {
+                        selecting_discard = false;
+                        continue;
+                    }
                     // Draw selected card and all cards to the right of it
 
                     // If the slot is occupied but stack is empty, push the existing card to the stack first
