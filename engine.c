@@ -106,17 +106,13 @@ void discard_tile(Player *player, int hand_index, Tile discard_pile[], int *disc
 }
 
 
-
 // ====================================================================
-// NOU: LOGICA PENTRU VALIDAREA FORMAȚIILOR (TERȚE ȘI SUITE) ȘI A MESEI
+// LOGICA PENTRU VALIDAREA FORMAȚIILOR (TERȚE ȘI SUITE) ȘI A MESEI
 // ====================================================================
 
 // Funcție pentru Terță (Grup: 1-1-1)
 bool is_valid_group(Tile tiles[], int count) {
-    // 1. Verificăm lungimea (între 3 și 4 piese)
-    if (count < 3 || count > 4) {
-        return false;
-    }
+    if (count < 3 || count > 4) return false;
 
     int target_number = -1; 
     bool seen_color[5] = {false}; 
@@ -124,43 +120,30 @@ bool is_valid_group(Tile tiles[], int count) {
     int real_tiles_count = 0;
 
     for (int i = 0; i < count; i++) {
-        // Dacă e Joker
         if (tiles[i].number == 0) { 
             joker_count++;
-            if (joker_count > 1) return false; // MAXIM 1 Joker permis
+            if (joker_count > 1) return false; 
             continue;
         }
-
         real_tiles_count++;
-
-        // Stabilim numărul de bază
         if (target_number == -1) {
             target_number = tiles[i].number;
         } else if (tiles[i].number != target_number) {
-            return false; // Numere diferite = invalid
+            return false;
         }
-
-        // Verificăm să nu se repete culorile
-        if (seen_color[tiles[i].color] == true) {
-            return false; 
-        }
+        if (seen_color[tiles[i].color] == true) return false; 
         seen_color[tiles[i].color] = true;
     }
-
-    // Regula strictă: Minim 2 piese reale
-    if (real_tiles_count < 2) {
-        return false;
-    }
-
+    if (real_tiles_count < 2) return false;
     return true;
 }
 
-// Helper pentru Suită: verifică dacă golurile dintre numere pot fi acoperite de Joker
+// Helper pentru Suită
 bool check_sequence_gaps(int nums[], int num_count, int jokers_available) {
     int jokers_needed = 0;
     for (int i = 1; i < num_count; i++) {
         int diff = nums[i] - nums[i-1];
-        if (diff <= 0) return false; // Nu sunt permise duplicate în suită
+        if (diff <= 0) return false; 
         jokers_needed += (diff - 1);
     }
     return jokers_needed <= jokers_available;
@@ -168,38 +151,30 @@ bool check_sequence_gaps(int nums[], int num_count, int jokers_available) {
 
 // Funcție pentru Suită (Run: 1-2-3-...)
 bool is_valid_run(Tile tiles[], int count) {
-    // 1. Verificăm lungimea (între 3 și 14 piese, pentru a permite și acel 1 de la final)
-    if (count < 3 || count > 14) {
-        return false;
-    }
+    if (count < 3 || count > 14) return false;
 
     int joker_count = 0;
     int real_tiles_count = 0;
     Color target_color = JOKER_COLOR;
-    int nums[14]; // Stocăm numerele reale pentru a le sorta
+    int nums[14]; 
 
-    // 2. Extragem datele și verificăm culoarea
     for (int i = 0; i < count; i++) {
         if (tiles[i].number == 0) {
             joker_count++;
-            if (joker_count > 1) return false; // MAXIM 1 Joker permis
+            if (joker_count > 1) return false;
             continue;
         }
-        
         if (target_color == JOKER_COLOR) {
-            target_color = tiles[i].color; // Setăm culoarea suitei
+            target_color = tiles[i].color; 
         } else if (tiles[i].color != target_color) {
-            return false; // Culoare diferită = invalid
+            return false; 
         }
-        
         nums[real_tiles_count] = tiles[i].number;
         real_tiles_count++;
     }
 
-    // Regula strictă: Minim 2 piese reale
     if (real_tiles_count < 2) return false;
 
-    // 3. Sortăm piesele reale crescător (Bubble Sort)
     for (int i = 0; i < real_tiles_count - 1; i++) {
         for (int j = 0; j < real_tiles_count - i - 1; j++) {
             if (nums[j] > nums[j+1]) {
@@ -210,15 +185,10 @@ bool is_valid_run(Tile tiles[], int count) {
         }
     }
 
-    // 4. Verificăm secvența standard (ex: 7-8-9)
     bool valid = check_sequence_gaps(nums, real_tiles_count, joker_count);
     
-    // 5. Tratăm cazul special în care avem "1" și el ar putea sta după "13"
     if (!valid && nums[0] == 1) {
-        // Transformăm temporar 1 în 14 (pentru a reprezenta piesa de după 13)
         nums[0] = 14;
-        
-        // Resortăm array-ul
         for (int i = 0; i < real_tiles_count - 1; i++) {
             for (int j = 0; j < real_tiles_count - i - 1; j++) {
                 if (nums[j] > nums[j+1]) {
@@ -228,30 +198,22 @@ bool is_valid_run(Tile tiles[], int count) {
                 }
             }
         }
-        
-        // Reverificăm secvența
         valid = check_sequence_gaps(nums, real_tiles_count, joker_count);
-        
-        // Asigurăm regula "13-1 și gata" (nu dăm voie să continue cu un 2 fals - adică 15)
         if (valid && nums[real_tiles_count - 1] > 14) {
             valid = false;
         }
     }
-
     return valid;
 }
 
-// Funcție principală: acceptă formația dacă e fie Terță, fie Suită
 bool is_valid_meld(Tile tiles[], int count) {
     return is_valid_group(tiles, count) || is_valid_run(tiles, count);
 }
 
-// Inițializează masa de joc goală
 void init_table(Table *table) {
     table->meld_count = 0;
 }
 
-// Pune o formație pe masă (dacă este validă)
 bool place_meld(Table *table, Tile tiles[], int count) {
     if (!is_valid_meld(tiles, count)) return false;
     if (table->meld_count >= MAX_MELDS) return false;
@@ -265,7 +227,6 @@ bool place_meld(Table *table, Tile tiles[], int count) {
     return true;
 }
 
-// Trage o carte din teancul de piese decartate
 void draw_from_discard(Tile discard_pile[], int *discard_count, Player *player) {
     if (*discard_count > 0 && player->tile_count < 20) {
         (*discard_count)--;
@@ -276,7 +237,7 @@ void draw_from_discard(Tile discard_pile[], int *discard_count, Player *player) 
 
 
 // ====================================================================
-// NOU: SCOR, REGULA DE 45 DE PUNCTE (CU SUITĂ OBLIGATORIE) ȘI VICTORIE
+// SCOR, REGULA DE 45 DE PUNCTE (DINAMIC) ȘI VICTORIE
 // ====================================================================
 
 // Calculează punctele rămase în mâna jucătorului
@@ -288,57 +249,103 @@ int calculate_hand_points(Player *player) {
     return total;
 }
 
+// Calculează valoarea dinamică a unei formații DOAR PENTRU COBORÂRE
+int calculate_meld_points(Tile tiles[], int count) {
+    if (is_valid_group(tiles, count)) {
+        int num = -1;
+        for (int i = 0; i < count; i++) {
+            if (tiles[i].number != 0) {
+                num = tiles[i].number;
+                break;
+            }
+        }
+        if (num == 1) return count * 10; // Regula: 1-1-1 = 30 pct
+        if (num >= 10) return count * 10;
+        return count * 5;
+    }
+
+    if (is_valid_run(tiles, count)) {
+        bool has_one = false;
+        bool has_thirteen = false;
+        for (int i = 0; i < count; i++) {
+            if (tiles[i].number == 1) has_one = true;
+            if (tiles[i].number == 13) has_thirteen = true;
+        }
+        bool one_is_high = (has_one && has_thirteen);
+
+        int resolved[14] = {0};
+        // Setăm valorile reale
+        for (int i = 0; i < count; i++) {
+            if (tiles[i].number != 0) {
+                resolved[i] = tiles[i].number;
+                if (resolved[i] == 1 && one_is_high) resolved[i] = 14;
+            }
+        }
+        
+        // Deducem valoarea Jokerilor în funcție de vecinii lor
+        for (int i = 0; i < count; i++) {
+            if (resolved[i] == 0) {
+                // Căutăm la dreapta
+                for (int j = i + 1; j < count; j++) {
+                    if (resolved[j] != 0) {
+                        resolved[i] = resolved[j] - (j - i);
+                        break;
+                    }
+                }
+                // Căutăm la stânga dacă nu am găsit
+                if (resolved[i] == 0) {
+                    for (int j = i - 1; j >= 0; j--) {
+                        if (resolved[j] != 0) {
+                            resolved[i] = resolved[j] + (i - j);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Calculăm punctele totale
+        int total = 0;
+        for (int i = 0; i < count; i++) {
+            if (resolved[i] >= 10) total += 10;
+            else total += 5;
+        }
+        return total;
+    }
+    return 0;
+}
+
 // Verifică dacă o singură formație atinge 45 de puncte și este SUITĂ
 bool check_initial_meld(Tile tiles[], int count) {
     if (!is_valid_meld(tiles, count)) return false;
-    
-    // Regula casei: Dacă e o singură formație, ea trebuie obligatoriu să fie suită!
     if (!is_valid_run(tiles, count)) return false;
     
-    int total = 0;
-    for (int i = 0; i < count; i++) {
-        if (tiles[i].number != 0) {  // Sărim peste Jokeri
-            total += tiles[i].points;
-        }
-    }
-    return total >= 45;
+    return calculate_meld_points(tiles, count) >= 45;
 }
 
 // Verifică dacă mai multe formații cumulate ating 45 de puncte și conțin MINIM O SUITĂ
 bool check_initial_melds(Meld staged[], int meld_count) {
     int total = 0;
-    bool has_run = false; // Ținem minte dacă am găsit măcar o suită
+    bool has_run = false;
 
     for (int m = 0; m < meld_count; m++) {
         if (!is_valid_meld(staged[m].tiles, staged[m].count)) return false;
         
-        // Verificăm dacă această formație specifică este o suită
         if (is_valid_run(staged[m].tiles, staged[m].count)) {
             has_run = true;
         }
         
-        // Adunăm punctele (fără Jokeri)
-        for (int i = 0; i < staged[m].count; i++) {
-            if (staged[m].tiles[i].number != 0) { 
-                total += staged[m].tiles[i].points;
-            }
-        }
+        total += calculate_meld_points(staged[m].tiles, staged[m].count);
     }
     
-    // Validarea finală: minim 45 de puncte ȘI să existe obligatoriu o suită
     return (total >= 45 && has_run);
 }
 
-// Verifică dacă jucătorul a câștigat
-// După ce pune formațiile/lipiturile, rămâne cu o carte pe care o dă jos (decartare)
-// După decartare, ajunge la 0 cărți, deci a închis jocul.
 bool has_player_won(Player *player) {
     return player->tile_count == 0;
 }
 
-// Elimină piesele etalate din mâna jucătorului
 void remove_tiles_from_hand(Player *player, int indices[], int num_indices) {
-    // Sortăm indicii descrescător pentru a nu strica ordinea la ștergere
     for (int i = 0; i < num_indices - 1; i++) {
         for (int j = 0; j < num_indices - i - 1; j++) {
             if (indices[j] < indices[j + 1]) {
@@ -348,8 +355,6 @@ void remove_tiles_from_hand(Player *player, int indices[], int num_indices) {
             }
         }
     }
-    
-    // Eliminăm piesele și mutăm restul cărților spre stânga
     for (int k = 0; k < num_indices; k++) {
         int idx = indices[k];
         if (idx >= 0 && idx < player->tile_count) {
@@ -361,81 +366,53 @@ void remove_tiles_from_hand(Player *player, int indices[], int num_indices) {
     }
 }
 
+
 // ====================================================================
-// NOU: EXECUTAREA MUTĂRILOR (ETALARE INIȚIALĂ ȘI LIPITURI)
+// EXECUTAREA MUTĂRILOR (ETALARE INIȚIALĂ ȘI LIPITURI)
 // ====================================================================
 
-// Încearcă să facă prima coborâre. Dacă e validă, aplică modificările.
 bool play_initial_melds(Player *player, Table *table, Meld staged[], int meld_count, int hand_indices[], int num_indices) {
-    // Dacă jucătorul a coborât deja în trecut, nu mai aplicăm regula asta
-    if (player->has_melded == true) {
-        return false; 
-    }
+    if (player->has_melded == true) return false; 
 
-    // Verificăm dacă formațiile strânse ating 45 de puncte și conțin o suită
     if (check_initial_melds(staged, meld_count)) {
-        
-        // 1. Punem formațiile oficial pe masă
         for (int i = 0; i < meld_count; i++) {
             place_meld(table, staged[i].tiles, staged[i].count);
         }
-        
-        // 2. Scoatem piesele folosite din mâna jucătorului
         remove_tiles_from_hand(player, hand_indices, num_indices);
-        
-        // 3. Deblocăm jucătorul pentru viitoare lipituri
         player->has_melded = true;
-        
-        return true; // Mutare acceptată!
+        return true; 
     }
-    
-    return false; // Nu îndeplinește condițiile de coborâre
+    return false; 
 }
 
-// Verifică strict tehnic dacă o piesă se poate lipi la o formație existentă pe masă
 bool add_tile_to_meld(Table *table, int meld_index, Tile tile) {
     if (meld_index < 0 || meld_index >= table->meld_count) return false;
     
     Meld *m = &table->melds[meld_index];
-    
-    // O formație nu poate avea tehnic mai mult de 14 piese (la suită)
     if (m->count >= 14) return false;
 
-    // 1. Adăugăm piesa TEMPORAR la finalul formației
     m->tiles[m->count] = tile;
     m->count++;
 
-    // 2. Testăm dacă formația extinsă este încă validă
     if (is_valid_meld(m->tiles, m->count)) {
-        return true; // E validă, o păstrăm!
+        return true; 
     } else {
-        // 3. Dacă a stricat formația, dăm REVERT (ștergem piesa adăugată)
         m->count--; 
         return false;
     }
 }
 
-// Execută mutarea de lipire a unei piese din mână pe o formație de pe masă
 bool play_lipitura(Player *player, Table *table, int meld_index, int hand_index) {
-    // RESTRICȚIE: Nu poți lipi dacă nu te-ai etalat cu 45 de puncte!
-    if (player->has_melded == false) {
-        return false; 
-    }
+    if (player->has_melded == false) return false; 
 
-    // Validăm indexul din mână
-    if (hand_index < 0 || hand_index >= player->tile_count) {
-        return false;
-    }
+    if (hand_index < 0 || hand_index >= player->tile_count) return false;
 
     Tile tile_to_play = player->hand[hand_index];
 
-    // Încercăm să adăugăm piesa pe masă
     if (add_tile_to_meld(table, meld_index, tile_to_play)) {
-        // Dacă s-a lipit cu succes, o scoatem din mâna jucătorului
         int indices_to_remove[1] = {hand_index};
         remove_tiles_from_hand(player, indices_to_remove, 1);
         return true;
     }
-
-    return false; // Lipitura a fost respinsă de reguli
+    return false; 
 }
