@@ -108,6 +108,6 @@ bool has_player_won(Player *player);
 void remove_tiles_from_hand(Player *player, int indices[], int num_indices);
 
 // Validarea regulilor pentru tragerea din decartare
-bool validate_discard_rules(Player *player);
+bool validate_discard_rules(const Player *player);
 
 #endif

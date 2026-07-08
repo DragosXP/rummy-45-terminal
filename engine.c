@@ -459,16 +459,3 @@ bool validate_discard_rules(const Player *player) {
     }
     return true; 
 }
-
-bool validate_discard_rules(Player *player) {
-    if (!player->drew_from_discard_this_turn) {
-        return true;
-    }
-    // Check if primary_discard_drawn_tile is still in player's hand
-    for (int i = 0; i < player->tile_count; i++) {
-        if (player->hand[i].id == player->primary_discard_drawn_tile.id) {
-            return false; // Still in hand!
-        }
-    }
-    return true; // Successfully played!
-}
