@@ -2,6 +2,8 @@
 #define RUMMY_H
 
 #include <stdbool.h>
+#include <string.h>
+#include <time.h>
 
 #define TOTAL_TILES 106
 
@@ -42,12 +44,16 @@ typedef struct {
     bool has_melded;
     bool drew_from_discard_this_turn;
     Tile primary_discard_drawn_tile;
+    int score;
 } Player;
+
+#define MAX_PLAYERS 4
 
 // O singură formație de pe masă (suită sau grup)
 typedef struct {
     Tile tiles[13];   // maxim 13 piese într-o suită
     int  count;       // câte piese se află în această formație
+    int  owner_id;    // id-ul jucatorului care a plasat formatia
 } Meld;
 
 // Masa comună unde se află toate formațiile jucate
@@ -64,7 +70,7 @@ extern int discard_count;
 // Function declarations
 void init_deck(Deck *deck);
 void shuffle_deck(Deck *deck);
-void deal_hands(Deck *deck, Player *p1, Player *p2);
+void deal_hands(Deck *deck, Player players[], int num_players, int starting_player_idx);
 void draw_from_deck(Deck *deck, Player *player);
 void discard_tile(Player *player, int hand_index, Tile discard_pile[], int *discard_count);
 
@@ -78,13 +84,14 @@ void sort_run(Tile tiles[], int count);
 
 // Operațiunile mesei (Table operations)
 void init_table(Table *table);
-bool place_meld(Table *table, Tile tiles[], int count);
+bool place_meld(Table *table, Tile tiles[], int count, int owner_id);
 
 // Extragerea din teancul de decartare (Draw from discard pile)
 void draw_from_discard(Tile discard_pile[], int *discard_count, Player *player);
 
 // Validarea si executarea etalarii initiale (45 puncte)
-bool play_initial_melds(Player *player, Table *table, Meld staged[], int meld_count, int hand_indices[], int num_indices);
+bool play_initial_melds(Player *player, Table *table, Meld staged[], int meld_count, int hand_indices[], int num_indices, int player_idx);
+int split_unordered_melds(Tile input[], int count, Meld output_melds[]);
 
 // Funcția de bază pentru a testa o lipitură
 bool add_tile_to_meld(Table *table, int meld_index, Tile tile);
