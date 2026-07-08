@@ -416,3 +416,93 @@ bool play_lipitura(Player *player, Table *table, int meld_index, int hand_index)
     }
     return false; 
 }
+
+void sort_run(Tile tiles[], int count) {
+    if (count < 2) return;
+
+    // 1. Detect if we have 13 and 1 in the run
+    bool has_13 = false;
+    bool has_1 = false;
+    for (int i = 0; i < count; i++) {
+        if (tiles[i].number == 13) has_13 = true;
+        if (tiles[i].number == 1) has_1 = true;
+    }
+    bool ace_high = (has_13 && has_1);
+
+    // 2. Extract non-jokers and sort them to find gaps/extremes
+    int non_jokers[15];
+    int nj_count = 0;
+    int first_nj_orig_idx = -1;
+    for (int i = 0; i < count; i++) {
+        if (tiles[i].number != 0) {
+            if (first_nj_orig_idx == -1) {
+                first_nj_orig_idx = i;
+            }
+            int val = tiles[i].number;
+            if (val == 1 && ace_high) {
+                val = 14;
+            }
+            non_jokers[nj_count++] = val;
+        }
+    }
+
+    // Sort non-jokers ascending (Bubble Sort)
+    for (int i = 0; i < nj_count - 1; i++) {
+        for (int j = 0; j < nj_count - i - 1; j++) {
+            if (non_jokers[j] > non_jokers[j+1]) {
+                int temp = non_jokers[j];
+                non_jokers[j] = non_jokers[j+1];
+                non_jokers[j+1] = temp;
+            }
+        }
+    }
+
+    // 3. Compute sort values for each tile
+    int sort_vals[15];
+    for (int i = 0; i < count; i++) {
+        if (tiles[i].number != 0) {
+            int val = tiles[i].number;
+            if (val == 1 && ace_high) {
+                val = 14;
+            }
+            sort_vals[i] = val;
+        } else {
+            // It's a Joker (number == 0)
+            int joker_val = 1;
+            if (nj_count > 0) {
+                int gap_idx = -1;
+                for (int k = 0; k < nj_count - 1; k++) {
+                    if (non_jokers[k+1] - non_jokers[k] == 2) {
+                        gap_idx = k;
+                        break;
+                    }
+                }
+                if (gap_idx != -1) {
+                    joker_val = non_jokers[gap_idx] + 1;
+                } else {
+                    if (i < first_nj_orig_idx) {
+                        joker_val = non_jokers[0] - 1;
+                    } else {
+                        joker_val = non_jokers[nj_count - 1] + 1;
+                    }
+                }
+            }
+            sort_vals[i] = joker_val;
+        }
+    }
+
+    // 4. Sort tiles array based on sort_vals using Bubble Sort
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = 0; j < count - i - 1; j++) {
+            if (sort_vals[j] > sort_vals[j+1]) {
+                int temp_val = sort_vals[j];
+                sort_vals[j] = sort_vals[j+1];
+                sort_vals[j+1] = temp_val;
+                
+                Tile temp_tile = tiles[j];
+                tiles[j] = tiles[j+1];
+                tiles[j+1] = temp_tile;
+            }
+        }
+    }
+}
