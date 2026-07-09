@@ -68,7 +68,7 @@ void init_game_ui() {
     init_pair(7, 46, -1);   // Highlight Cursor -> Neon Green
     init_pair(8, 51, -1);   // Staging Row 1 -> Cyan
 
-    init_pair(13, 15, 5);
+    init_pair(13, 15, 201);
 
     if (can_change_color()) {
         init_color(12, 502, 0, 502); // Purple: (128, 0, 128) -> (502, 0, 502)
@@ -925,8 +925,8 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
                         bar[insert_pos + i] = pct_text[i];
                     }
 
-                    // Bordura de jos se află exact la (s + r * 5 + 5)
-                    int print_row = s + r * 5 + 5;
+                    // Bordura de jos se află exact la (s + r * 5 + 3)
+                    int print_row = s + r * 5 + 3;
 
                     // Printăm scorul activând perechea de culori 13 (alb pe fundal magenta)
                     attron(COLOR_PAIR(13) | A_BOLD);
