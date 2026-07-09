@@ -1,4 +1,5 @@
 #include "rummy.h"
+#include "logger.h"
 #include <ncurses.h>
 #include <stdlib.h>
 #include <locale.h>
@@ -25,6 +26,9 @@ int extract_selected_melds(int player_idx, Meld staged[], int *staged_count, int
 Tile board_stack[MAX_PLAYERS][TOTAL_TILES];
 int board_stack_count[MAX_PLAYERS] = {0};
 
+Tile undo_discard_drawn_tiles[TOTAL_TILES];
+int undo_discard_drawn_count = 0;
+int undo_discard_count_restore = 0;
 
 char global_error_msg[128] = "";
 struct timeval global_error_time = {0, 0};
@@ -1025,6 +1029,10 @@ int extract_selected_melds(int player_idx, Meld staged[], int *staged_count, int
 // Places selected board cards into shared table if valid
 // Returns status code: 0 = success, -1 = block < 3 tiles or no tiles, -2 = initial meld rule failed, -3 = invalid meld
 int play_selected_meld(int player_idx, Player *player, Table *table) {
+    if (player->melded_this_turn) {
+        set_error("Ai etalat deja în această tură! Trebuie să aștepți tura următoare.");
+        return -4;
+    }
     Meld staged[15];
     int staged_count = 0;
     
@@ -1038,6 +1046,9 @@ int play_selected_meld(int player_idx, Player *player, Table *table) {
 
     // Validare
     if (!player->has_melded) {
+        if (global_turn_number == 1) {
+            return -5;
+        }
         if (!check_initial_melds(staged, staged_count)) {
             return -2;
         }
@@ -1313,6 +1324,7 @@ int main() {
     }
 
     init_game_ui();
+    log_event("Joc pornit.");
 
     Deck deck = {0};
     Player players[MAX_PLAYERS] = {0};
@@ -1330,6 +1342,11 @@ int main() {
     atuu_tile = deck.tiles[0];
 
     init_boards_from_players(players, player_count);
+
+    global_turn_number = 1;
+    discard_pile[0] = deck.tiles[--deck.size];
+    discard_count = 1;
+    first_discard_tile_id = discard_pile[0].id; // Blocat permanent
 
     // Initialize deck pile sizes
     {
@@ -1504,7 +1521,34 @@ int main() {
                         selecting_discard = false;
                         continue;
                     }
-                    // Draw selected card and all cards to the right of it
+
+                    if (!can_draw_from_discard(discard_cursor, active, global_turn_number)) {
+                        set_error("Mutare nepermisă! Cartea este blocată sau tura este invalidă.");
+                        continue;
+                    }
+
+                    if (!active->has_melded) {
+                        // Unmelded player tries to auto-meld using the last discard pile card
+                        if (attempt_auto_meld_from_discard(active, &table, current_player)) {
+                            // Success! Boards are updated inside the function, sync them to UI
+                            init_boards_from_players(players, player_count);
+                            selecting_discard = false;
+                            state = STATE_PLAY;
+                            cursor_r = 0;
+                            cursor_c = 14;
+                        } else {
+                            set_error("Nu poți lua cartea deoarece nu poți forma o etalare validă de minim 45 puncte!");
+                        }
+                        continue;
+                    }
+
+                    // Otherwise, already melded player draws normally:
+                    // Save info for Undo Draw
+                    undo_discard_count_restore = discard_count;
+                    undo_discard_drawn_count = 0;
+                    for (int i = discard_cursor; i < discard_count; i++) {
+                        undo_discard_drawn_tiles[undo_discard_drawn_count++] = discard_pile[i];
+                    }
 
                     // If the slot is occupied but stack is empty, push the existing card to the stack first
                     if (board_stack_count[current_player] == 0 && boards[current_player][0][14].id != -1) {
@@ -1942,20 +1986,85 @@ int main() {
                                 }
                             }
                         } else {
-                            int status = play_selected_meld(current_player, active, &table);
-                            if (status == 0) {
-                                mvprintw(38, 5, "Formație(i) jucată cu succes!                                   ");
-                                refresh();
-                                napms(1200);
-                                mvprintw(38, 5, "                                                                        ");
-                                cursor_r = saved_board_r[current_player];
-                                cursor_c = saved_board_c[current_player];
-                            } else if (status == -1) {
-                                set_error("Selecție invalidă! O formație are <3 piese sau piese invalide.");
-                            } else if (status == -2) {
-                                set_error("Prima etalare invalidă! (necesită minim 45 puncte și cel puțin o suită)");
-                            } else if (status == -3) {
-                                set_error("Formație invalidă! Grupurile/suitele trebuie să respecte regulile.");
+                            if (!can_place_meld_without_emptying(active, selected_count)) {
+                                set_error("Trebuie să îți rămână cel puțin o piesă în mână pentru a închide!");
+                            } else {
+                                int status = play_selected_meld(current_player, active, &table);
+                                if (status == 0) {
+                                    mvprintw(38, 5, "Formație(i) jucată cu succes!                                   ");
+                                    refresh();
+                                    napms(1200);
+                                    mvprintw(38, 5, "                                                                        ");
+                                    cursor_r = saved_board_r[current_player];
+                                    cursor_c = saved_board_c[current_player];
+                                    
+                                    // Victorie automată
+                                    if (active->tile_count == 1) {
+                                        int rem_r = -1, rem_c = -1;
+                                        for (int r = 0; r < 2; r++) {
+                                            for (int c = 0; c < 15; c++) {
+                                                if (boards[current_player][r][c].id != -1) {
+                                                    rem_r = r;
+                                                    rem_c = c;
+                                                    break;
+                                                }
+                                            }
+                                            if (rem_r != -1) break;
+                                        }
+                                        if (rem_r != -1 && rem_c != -1) {
+                                            discard_pile[discard_count++] = boards[current_player][rem_r][rem_c];
+                                            boards[current_player][rem_r][rem_c].id = -1;
+                                            boards[current_player][rem_r][rem_c].number = -1;
+                                            active->tile_count = 0;
+                                            sync_board_to_player(current_player, active);
+                                        }
+                                    }
+                                    
+                                    if (active->tile_count == 0) {
+                                         clear();
+                                         attron(COLOR_PAIR(7) | A_BOLD);
+                                         mvprintw(10, 30, "╔══════════════════════════════════════╗");
+                                         mvprintw(11, 30, "║   FELICITĂRI! Ai câștigat jocul!     ║");
+                                         mvprintw(12, 30, "╚══════════════════════════════════════╝");
+                                         attroff(COLOR_PAIR(7) | A_BOLD);
+                                         
+                                         char usernames[4][11] = {"Dragos715", "0Gabriela0", "KasaneTeto", "Messi"};
+                                         int row = 15;
+                                         attron(COLOR_PAIR(6));
+                                         mvprintw(row++, 30, "── Scoruri Finale ──");
+                                         attroff(COLOR_PAIR(6));
+                                         for (int i = 0; i < player_count; i++) {
+                                             if (i == current_player) {
+                                                 attron(COLOR_PAIR(7) | A_BOLD);
+                                                 mvprintw(row++, 30, "★ %s: %d puncte (CÂȘTIGĂTOR)", usernames[i], players[i].score);
+                                                 attroff(COLOR_PAIR(7) | A_BOLD);
+                                             } else {
+                                                 attron(COLOR_PAIR(3));
+                                                 mvprintw(row++, 30, "  %s: %d pct | Penalizare: -%d pct", usernames[i], players[i].score, calculate_hand_points(&players[i]));
+                                                 attroff(COLOR_PAIR(3));
+                                             }
+                                         }
+                                         row += 2;
+                                         attron(COLOR_PAIR(6));
+                                         mvprintw(row, 30, "Apasă orice tastă pentru a ieși...");
+                                         attroff(COLOR_PAIR(6));
+                                         refresh();
+                                         cbreak();
+                                         timeout(-1);  // Pune ncurses în mod blocant
+                                         getch();
+                                         running = 0;
+                                    }
+                                } else if (status == -1) {
+                                    set_error("Selecție invalidă! O formație are <3 piese sau piese invalide.");
+                                } else if (status == -2) {
+                                    set_error("Prima etalare invalidă! (necesită minim 45 puncte și cel puțin o suită)");
+                                } else if (status == -3) {
+                                    set_error("Formație invalidă! Grupurile/suitele trebuie să respecte regulile.");
+                                } else if (status == -4) {
+                                    set_error("Ai etalat deja în această tură! Trebuie să aștepți tura următoare.");
+                                } else if (status == -5) {
+                                    set_error("Nu poți etala în prima tură a jocului!");
+                                }
                             }
                         }
                     } else {
@@ -2206,6 +2315,12 @@ int main() {
                                      saved_board_c[current_player] = held_c;
                                      
                                      current_player = (current_player - 1 + player_count) % player_count;
+                                     global_turn_number++;
+                                     players[current_player].melded_this_turn = false;
+                                     players[current_player].drew_from_discard_this_turn = false;
+                                     char log_msg[128];
+                                     snprintf(log_msg, sizeof(log_msg), "Tura %d. Jucator curent: %d", global_turn_number, current_player + 1);
+                                     log_event(log_msg);
                                      cursor_r = saved_board_r[current_player];
                                      cursor_c = saved_board_c[current_player];
                                      state = STATE_DRAW;
@@ -2276,6 +2391,54 @@ int main() {
                         }
                     }
                 } else if (ch == 'x' || ch == 'X') {
+                    if (active->drew_from_discard_this_turn) {
+                        // Undo Draw from discard!
+                        if (is_holding) {
+                            for (int i = 0; i < undo_discard_drawn_count; i++) {
+                                if (boards[current_player][held_r][held_c].id == undo_discard_drawn_tiles[i].id) {
+                                    is_holding = false;
+                                    held_r = -1;
+                                    held_c = -1;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        for (int r = 0; r < 2; r++) {
+                            for (int c = 0; c < 15; c++) {
+                                for (int i = 0; i < undo_discard_drawn_count; i++) {
+                                    if (boards[current_player][r][c].id == undo_discard_drawn_tiles[i].id) {
+                                        boards[current_player][r][c].id = -1;
+                                        boards[current_player][r][c].number = -1;
+                                        selected_tiles[current_player][r][c] = false;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Also clean board_stack
+                        board_stack_count[current_player] = 0;
+
+                        // 2. Restore discard pile
+                        discard_count = undo_discard_count_restore - undo_discard_drawn_count;
+                        for (int i = 0; i < undo_discard_drawn_count; i++) {
+                            discard_pile[discard_count++] = undo_discard_drawn_tiles[i];
+                        }
+
+                        // 3. Reset player flags
+                        active->drew_from_discard_this_turn = false;
+
+                        // 4. Sync player hand and boards
+                        sync_board_to_player(current_player, active);
+
+                        // 5. Change state back to STATE_DRAW
+                        state = STATE_DRAW;
+                        select_deck = true;
+                        cursor_r = 0;
+                        cursor_c = 0;
+                        continue;
+                    }
+
                     if (is_holding) {
                         if (cursor_r == -1) {
                             cursor_r = 0;
@@ -2359,6 +2522,12 @@ int main() {
                             saved_board_c[current_player] = cursor_c;
 
                             current_player = (current_player - 1 + player_count) % player_count;
+                            global_turn_number++;
+                            players[current_player].melded_this_turn = false;
+                            players[current_player].drew_from_discard_this_turn = false;
+                            char log_msg[128];
+                            snprintf(log_msg, sizeof(log_msg), "Tura %d. Jucator curent: %d", global_turn_number, current_player + 1);
+                            log_event(log_msg);
                             cursor_r = 0;
                             cursor_c = 0;
                             state = STATE_DRAW;
