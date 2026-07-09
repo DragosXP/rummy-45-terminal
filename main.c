@@ -943,6 +943,9 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
 // Discards a tile from the player's board and updates the game state
 void discard_tile_from_board(int player_idx, Player *player, int r, int c) {
     if (boards[player_idx][r][c].id != -1) {
+        if (discard_count == 0) {
+            first_discard_tile_id = boards[player_idx][r][c].id;
+        }
         discard_pile[discard_count++] = boards[player_idx][r][c];
         boards[player_idx][r][c].id = -1;
         boards[player_idx][r][c].number = -1;
@@ -1344,9 +1347,8 @@ int main() {
     init_boards_from_players(players, player_count);
 
     global_turn_number = 1;
-    discard_pile[0] = deck.tiles[--deck.size];
-    discard_count = 1;
-    first_discard_tile_id = discard_pile[0].id; // Blocat permanent
+    discard_count = 0;
+    first_discard_tile_id = -1; // Blocat la prima decartare
 
     // Initialize deck pile sizes
     {
@@ -2272,7 +2274,10 @@ int main() {
                                 set_error("Eroare: Nu ții nicio piesă!");
                             } else {
                                  // Discard the held card!
-                                discard_pile[discard_count++] = boards[current_player][held_r][held_c];
+                                 if (discard_count == 0) {
+                                     first_discard_tile_id = boards[current_player][held_r][held_c].id;
+                                 }
+                                 discard_pile[discard_count++] = boards[current_player][held_r][held_c];
                                 boards[current_player][held_r][held_c].id = -1;
                                 boards[current_player][held_r][held_c].number = -1;
                                 sync_board_to_player(current_player, active);
