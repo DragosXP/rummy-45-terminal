@@ -63,6 +63,9 @@ void init_game_ui() {
     init_pair(6, 15, -1);   // Default/Borders -> Pure White
     init_pair(7, 46, -1);   // Highlight Cursor -> Neon Green
     init_pair(8, 51, -1);   // Staging Row 1 -> Cyan
+
+    init_pair(13, 15, 5);
+
     if (can_change_color()) {
         init_color(12, 502, 0, 502); // Purple: (128, 0, 128) -> (502, 0, 502)
         init_pair(9, 12, -1);
@@ -870,6 +873,67 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
             }
         }
     }
+
+    // --- LOGICA NOUĂ: Scanare grupuri consecutive și afișare punctaj (= XXpct =) ---
+    extern int calculate_meld_points(Tile tiles[], int count);
+    extern bool is_valid_meld(Tile tiles[], int count);
+
+    for (int r = 0; r < 2; r++) {
+        int c = 0;
+        while (c < 15) {
+            // Verificăm dacă am găsit prima piesă dintr-un grup
+            if (boards[player_idx][r][c].id != -1) {
+                int start_c = c;
+                Tile block[15];
+                int b_count = 0;
+
+                // Extragem toate piesele consecutive într-un vector (până dăm de un loc gol)
+                while (c < 15 && boards[player_idx][r][c].id != -1) {
+                    block[b_count++] = boards[player_idx][r][c];
+                    c++;
+                }
+                int end_c = c - 1;
+
+                // Dacă grupul are minim 3 piese și este valid, calculăm și afișăm scorul
+                if (b_count >= 3 && is_valid_meld(block, b_count)) {
+                    int pts = calculate_meld_points(block, b_count);
+
+                    // Calculăm coordonatele pentru centrare sub acest grup
+                    int col_start = get_board_col(start_c);
+                    int col_end = get_board_col(end_c) + 6; // Spans to the end of the last tile
+                    int total_width = col_end - col_start;
+
+                    char pct_text[32];
+                    snprintf(pct_text, sizeof(pct_text), "=%dpct=", pts);
+                    int text_len = strlen(pct_text);
+
+                    // Create the full bar filled with '='
+                    char bar[120];
+                    int target_width = total_width;
+                    if (target_width >= (int)sizeof(bar)) target_width = (int)sizeof(bar) - 1;
+                    memset(bar, '=', target_width);
+                    bar[target_width] = '\0';
+
+                    // Insert the score text in the center
+                    int insert_pos = (target_width - text_len) / 2;
+                    if (insert_pos < 0) insert_pos = 0;
+                    for (int i = 0; i < text_len && insert_pos + i < target_width; i++) {
+                        bar[insert_pos + i] = pct_text[i];
+                    }
+
+                    // Bordura de jos se află exact la (s + r * 5 + 5)
+                    int print_row = s + r * 5 + 5;
+
+                    // Printăm scorul activând perechea de culori 13 (alb pe fundal magenta)
+                    attron(COLOR_PAIR(13) | A_BOLD);
+                    mvprintw(print_row, col_start, "%s", bar);
+                    attroff(COLOR_PAIR(13) | A_BOLD);
+                }
+            } else {
+                c++;
+            }
+        }
+    }
 }
 
 // Discards a tile from the player's board and updates the game state
@@ -1483,6 +1547,8 @@ int main() {
                             saved_board_c[current_player] = cursor_c;
                             cursor_on_board_during_draw = false;
                             select_deck = saved_select_deck[current_player];
+                        } else {
+                            set_error("Trebuie să tragi o carte înainte de a decarta!");
                         }
                     }
                 } else if (ch == KEY_DOWN) {
@@ -1524,10 +1590,7 @@ int main() {
                     }
                 } else if (ch == 'x' || ch == 'X') {
                     if (meld_selection_mode) {
-                        mvprintw(38, 5, "Trebuie să tragi o carte mai întâi!");
-                        refresh();
-                        napms(1500);
-                        mvprintw(38, 5, "                                   ");
+                        set_error("Trebuie să tragi o carte mai întâi!");
                     } else {
                         if (is_holding) {
                             is_holding = false;
@@ -1716,6 +1779,29 @@ int main() {
                         }
 
                         if (selected_count == 1) {
+                            int sel_r = -1, sel_c = -1;
+                            for (int r = 0; r < 2; r++) {
+                                for (int c = 0; c < 15; c++) {
+                                    if (selected_tiles[current_player][r][c] && boards[current_player][r][c].id != -1) {
+                                        sel_r = r;
+                                        sel_c = c;
+                                        break;
+                                    }
+                                }
+                            }
+                            // Ieșim din modul de selecție
+                            meld_selection_mode = false;
+
+                            // Deselectăm piesa de pe tablă
+                            if (sel_r != -1 && sel_c != -1) {
+                                selected_tiles[current_player][sel_r][sel_c] = false;
+                                // Punem piesa în starea "ținută" (is_holding)
+                                is_holding = true;
+                                held_r = sel_r;
+                                held_c = sel_c;
+                            }
+
+                            // Mutăm cursorul sus în zona de decartare
                             cursor_r = -1;
                             cursor_c = 14;
                             attach_side = 0;
@@ -1739,14 +1825,14 @@ int main() {
                             }
                             if (selected_count == 0) {
                                 if (table.meld_count > 0) {
-                                    int pmc = get_player_meld_count(&table, current_player);
+                                    int pmc = table.meld_count;
                                     int bottom_row = pmc > 0 ? pmc - 1 : 0;
                                     cursor_c = bottom_row * 4;
                                     attach_side = 0;
                                 }
                             } else {
                                 if (table.meld_count > 0) {
-                                    int pmc = get_player_meld_count(&table, current_player);
+                                    int pmc = table.meld_count;
                                     int bottom_row = pmc > 0 ? pmc - 1 : 0;
                                     cursor_c = bottom_row * 4;
                                     attach_side = 0;
@@ -1788,12 +1874,7 @@ int main() {
                                     cursor_c = target_col;
                                 } else {
                                     // Down from bottom row goes to Discard Pile
-                                    attron(COLOR_PAIR(3) | A_BOLD);
-                                    mvprintw(38, 5, "Nu poți accesa zona de decartare fără piese selectate!");
-                                    attroff(COLOR_PAIR(3) | A_BOLD);
-                                    refresh();
-                                    napms(500);
-                                    mvprintw(38, 5, "                                                              ");
+                                    set_error("Nu poți accesa zona de decartare fără piese selectate!");
                                 }
                             } else {
                                 // Down from Discard Pile goes to private board
@@ -1838,10 +1919,7 @@ int main() {
 
                         if (selected_count == 1) {
                             if (!active->has_melded) {
-                                mvprintw(38, 5, "Trebuie să te etalezi (min. 45 pct) înainte de a face lipituri!");
-                                refresh();
-                                napms(2000);
-                                mvprintw(38, 5, "                                                                        ");
+                                set_error("Trebuie să te etalezi (min. 45 pct) înainte de a face lipituri!");
                             } else {
                                 Tile tile = boards[current_player][sel_r][sel_c];
                                 if (can_attach_tile_to_side(&table.melds[cursor_c], tile, attach_side)) {
@@ -1853,15 +1931,15 @@ int main() {
                                         cursor_r = saved_board_r[current_player];
                                         cursor_c = saved_board_c[current_player];
                                         mvprintw(38, 5, "Lipitură reușită!                               ");
+                                        refresh();
+                                        napms(1200);
+                                        mvprintw(38, 5, "                                                                        ");
                                     } else {
-                                        mvprintw(38, 5, "Mutare invalidă pentru această parte a formației!");
+                                        set_error("Mutare invalidă pentru această parte a formației!");
                                     }
                                 } else {
-                                    mvprintw(38, 5, "Mutare invalidă pentru această parte a formației!");
+                                    set_error("Mutare invalidă pentru această parte a formației!");
                                 }
-                                refresh();
-                                napms(1200);
-                                mvprintw(38, 5, "                                                                        ");
                             }
                         } else {
                             int status = play_selected_meld(current_player, active, &table);
@@ -1873,20 +1951,11 @@ int main() {
                                 cursor_r = saved_board_r[current_player];
                                 cursor_c = saved_board_c[current_player];
                             } else if (status == -1) {
-                                mvprintw(38, 5, "Selecție invalidă! O formație are <3 piese sau piese invalide.");
-                                refresh();
-                                napms(1500);
-                                mvprintw(38, 5, "                                                                        ");
+                                set_error("Selecție invalidă! O formație are <3 piese sau piese invalide.");
                             } else if (status == -2) {
-                                mvprintw(38, 5, "Prima etalare invalidă! (necesită minim 45 puncte și cel puțin o suită)");
-                                refresh();
-                                napms(2000);
-                                mvprintw(38, 5, "                                                                        ");
+                                set_error("Prima etalare invalidă! (necesită minim 45 puncte și cel puțin o suită)");
                             } else if (status == -3) {
-                                mvprintw(38, 5, "Formație invalidă! Grupurile/suitele trebuie să respecte regulile.");
-                                refresh();
-                                napms(1500);
-                                mvprintw(38, 5, "                                                                        ");
+                                set_error("Formație invalidă! Grupurile/suitele trebuie să respecte regulile.");
                             }
                         }
                     } else {
@@ -2028,7 +2097,7 @@ int main() {
                     } else if (cursor_r == -1) {
                         if (cursor_c == 14) {
                             if (table.meld_count > 0) {
-                                int pmc = get_player_meld_count(&table, current_player);
+                                int pmc = table.meld_count;
                                 int bottom_row = pmc > 0 ? pmc - 1 : 0;
                                 cursor_c = bottom_row * 4;
                                 attach_side = 0;
@@ -2050,7 +2119,7 @@ int main() {
                         if (is_holding) {
                             if (cursor_c < 14) {
                                 int current_row = cursor_c / 4;
-                                int pmc = get_player_meld_count(&table, current_player);
+                                int pmc = table.meld_count;
                                 int bottom_row = pmc > 0 ? pmc - 1 : 0;
                                 if (current_row < bottom_row) {
                                     int target_col = (current_row + 1) * 4 + (cursor_c % 4);
@@ -2068,7 +2137,7 @@ int main() {
                         } else {
                             if (cursor_c < 14) {
                                 int current_row = cursor_c / 4;
-                                int pmc = get_player_meld_count(&table, current_player);
+                                int pmc = table.meld_count;
                                 int bottom_row = pmc > 0 ? pmc - 1 : 0;
                                 if (current_row < bottom_row) {
                                     int target_col = (current_row + 1) * 4 + (cursor_c % 4);
@@ -2077,11 +2146,11 @@ int main() {
                                     }
                                     cursor_c = target_col;
                                 } else {
-                                    set_error("Nu poți accesa zona de decartare fără a ține o piesă!");
+                                    cursor_c = 14;
                                 }
                             } else {
-                                cursor_r = saved_board_r[current_player];
-                                cursor_c = saved_board_c[current_player];
+                                cursor_r = 0;
+                                cursor_c = held_c; // Restore position of the grabbed tile
                             }
                         }
                     } else if (cursor_r == 0) {
@@ -2091,63 +2160,72 @@ int main() {
                     if (cursor_r == -1) {
                         if (cursor_c == 14) {
                             if (!is_holding) {
-                                attron(COLOR_PAIR(3) | A_BOLD);
-                                mvprintw(38, 5, "Eroare: Nu ții nicio piesă!");
-                                attroff(COLOR_PAIR(3) | A_BOLD);
-                                refresh();
-                                napms(500);
-                                mvprintw(38, 5, "                                                              ");
-                            } else if (boards[current_player][held_r][held_c].number == 0) {
-                                set_error("Eroare: Nu poți decarta un Joker!");
+                                set_error("Eroare: Nu ții nicio piesă!");
                             } else {
-                                // Discard the held card!
+                                 // Discard the held card!
                                 discard_pile[discard_count++] = boards[current_player][held_r][held_c];
                                 boards[current_player][held_r][held_c].id = -1;
                                 boards[current_player][held_r][held_c].number = -1;
                                 sync_board_to_player(current_player, active);
 
-                                // Check win condition
-                                if (active->tile_count == 0) {
-                                    clear();
-                                    mvprintw(15, 20, "FELICITĂRI! Jucătorul %d a câștigat jocul!", current_player + 1);
-                                    int row = 17;
-                                    for (int i = 0; i < player_count; i++) {
-                                        if (i != current_player) {
-                                            mvprintw(row++, 20, "Jucătorul %d a rămas cu %d puncte penalizare în mână.", i + 1, calculate_hand_points(&players[i]));
-                                        }
-                                    }
-                                    mvprintw(row + 2, 20, "Apasă orice tastă pentru a ieși...");
-                                    refresh();
-                                    getch();
-                                    running = 0;
-                                } else {
-                                    saved_board_r[current_player] = held_r;
-                                    saved_board_c[current_player] = held_c;
-
-                                    current_player = (current_player - 1 + player_count) % player_count;
-                                    cursor_r = saved_board_r[current_player];
-                                    cursor_c = saved_board_c[current_player];
-                                    state = STATE_DRAW;
-                                    select_deck = true;
-                                    meld_selection_mode = false;
-                                    is_holding = false;
-                                    held_r = -1;
-                                    held_c = -1;
-                                    for (int p = 0; p < player_count; p++) {
-                                        for (int r = 0; r < 2; r++) {
-                                            for (int c = 0; c < 15; c++) {
-                                                selected_tiles[p][r][c] = false;
-                                            }
-                                        }
-                                    }
-                                }
+                                 if (active->tile_count == 0) {
+                                     clear();
+                                     attron(COLOR_PAIR(7) | A_BOLD);
+                                     mvprintw(10, 30, "╔══════════════════════════════════════╗");
+                                     mvprintw(11, 30, "║   FELICITĂRI! Ai câștigat jocul!     ║");
+                                     mvprintw(12, 30, "╚══════════════════════════════════════╝");
+                                     attroff(COLOR_PAIR(7) | A_BOLD);
+                                     
+                                     char usernames[4][11] = {"Dragos715", "0Gabriela0", "KasaneTeto", "Messi"};
+                                     int row = 15;
+                                     attron(COLOR_PAIR(6));
+                                     mvprintw(row++, 30, "── Scoruri Finale ──");
+                                     attroff(COLOR_PAIR(6));
+                                     for (int i = 0; i < player_count; i++) {
+                                         if (i == current_player) {
+                                             attron(COLOR_PAIR(7) | A_BOLD);
+                                             mvprintw(row++, 30, "★ %s: %d puncte (CÂȘTIGĂTOR)", usernames[i], players[i].score);
+                                             attroff(COLOR_PAIR(7) | A_BOLD);
+                                         } else {
+                                             attron(COLOR_PAIR(3));
+                                             mvprintw(row++, 30, "  %s: %d pct | Penalizare: -%d pct", usernames[i], players[i].score, calculate_hand_points(&players[i]));
+                                             attroff(COLOR_PAIR(3));
+                                         }
+                                     }
+                                     row += 2;
+                                     attron(COLOR_PAIR(6));
+                                     mvprintw(row, 30, "Apasă orice tastă pentru a ieși...");
+                                     attroff(COLOR_PAIR(6));
+                                     refresh();
+                                     cbreak();
+                                     timeout(-1);  // Pune ncurses în mod blocant
+                                     getch();
+                                     running = 0;
+                                 } else {
+                                     saved_board_r[current_player] = held_r;
+                                     saved_board_c[current_player] = held_c;
+                                     
+                                     current_player = (current_player - 1 + player_count) % player_count;
+                                     cursor_r = saved_board_r[current_player];
+                                     cursor_c = saved_board_c[current_player];
+                                     state = STATE_DRAW;
+                                     select_deck = true;
+                                     meld_selection_mode = false;
+                                     is_holding = false;
+                                     held_r = -1;
+                                     held_c = -1;
+                                     for (int p = 0; p < player_count; p++) {
+                                         for (int r = 0; r < 2; r++) {
+                                             for (int c = 0; c < 15; c++) {
+                                                 selected_tiles[p][r][c] = false;
+                                             }
+                                         }
+                                     }
+                                 }
                             }
                         } else if (cursor_c < table.meld_count) {
                             if (!active->has_melded) {
-                                mvprintw(38, 5, "Trebuie să te etalezi (min. 45 pct) înainte de a face lipituri!");
-                                refresh();
-                                napms(2000);
-                                mvprintw(38, 5, "                                                                        ");
+                                set_error("Trebuie să te etalezi (min. 45 pct) înainte de a face lipituri!");
                             } else {
                                 Tile tile = boards[current_player][held_r][held_c];
                                 if (can_attach_tile_to_side(&table.melds[cursor_c], tile, attach_side)) {
@@ -2162,15 +2240,15 @@ int main() {
                                         cursor_r = saved_board_r[current_player];
                                         cursor_c = saved_board_c[current_player];
                                         mvprintw(38, 5, "Lipitură reușită!                               ");
+                                        refresh();
+                                        napms(1200);
+                                        mvprintw(38, 5, "                                                                        ");
                                     } else {
-                                        mvprintw(38, 5, "Mutare invalidă pentru această parte a formației!");
+                                        set_error("Mutare invalidă pentru această parte a formației!");
                                     }
                                 } else {
-                                    mvprintw(38, 5, "Mutare invalidă pentru această parte a formației!");
+                                    set_error("Mutare invalidă pentru această parte a formației!");
                                 }
-                                refresh();
-                                napms(1200);
-                                mvprintw(38, 5, "                                                                        ");
                             }
                         }
                     } else {
@@ -2236,10 +2314,7 @@ int main() {
             } else if (ch == 'z' || ch == 'Z') {
                 if (boards[current_player][cursor_r][cursor_c].id != -1) {
                     if (!validate_discard_rules(active)) {
-                        mvprintw(38, 5, "Eroare: Trebuie să joci piesa extrasă din teanc într-o formație nouă!");
-                        refresh();
-                        napms(2000);
-                        mvprintw(38, 5, "                                                                               ");
+                        set_error("Eroare: Trebuie să joci piesa extrasă din teanc într-o formație nouă!");
                     } else {
                         active->drew_from_discard_this_turn = false; // resetare flag
                         discard_tile_from_board(current_player, active, cursor_r, cursor_c);
@@ -2247,15 +2322,35 @@ int main() {
                         // Check win condition
                         if (active->tile_count == 0) {
                             clear();
-                            mvprintw(15, 20, "FELICITĂRI! Jucătorul %d a câștigat jocul!", current_player + 1);
-                            int row = 17;
+                            attron(COLOR_PAIR(7) | A_BOLD);
+                            mvprintw(10, 30, "╔══════════════════════════════════════╗");
+                            mvprintw(11, 30, "║   FELICITĂRI! Ai câștigat jocul!     ║");
+                            mvprintw(12, 30, "╚══════════════════════════════════════╝");
+                            attroff(COLOR_PAIR(7) | A_BOLD);
+                            
+                            char usernames[4][11] = {"Dragos715", "0Gabriela0", "KasaneTeto", "Messi"};
+                            int row = 15;
+                            attron(COLOR_PAIR(6));
+                            mvprintw(row++, 30, "── Scoruri Finale ──");
+                            attroff(COLOR_PAIR(6));
                             for (int i = 0; i < player_count; i++) {
-                                if (i != current_player) {
-                                    mvprintw(row++, 20, "Jucătorul %d a rămas cu %d puncte penalizare în mână.", i + 1, calculate_hand_points(&players[i]));
+                                if (i == current_player) {
+                                    attron(COLOR_PAIR(7) | A_BOLD);
+                                    mvprintw(row++, 30, "★ %s: %d puncte (CÂȘTIGĂTOR)", usernames[i], players[i].score);
+                                    attroff(COLOR_PAIR(7) | A_BOLD);
+                                } else {
+                                    attron(COLOR_PAIR(3));
+                                    mvprintw(row++, 30, "  %s: %d pct | Penalizare: -%d pct", usernames[i], players[i].score, calculate_hand_points(&players[i]));
+                                    attroff(COLOR_PAIR(3));
                                 }
                             }
-                            mvprintw(row + 2, 20, "Apasă orice tastă pentru a ieși...");
+                            row += 2;
+                            attron(COLOR_PAIR(6));
+                            mvprintw(row, 30, "Apasă orice tastă pentru a ieși...");
+                            attroff(COLOR_PAIR(6));
                             refresh();
+                            cbreak();
+                            timeout(-1);  // Pune ncurses în mod blocant
                             getch();
                             running = 0;
                         } else {
