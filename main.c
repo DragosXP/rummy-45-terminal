@@ -1526,6 +1526,7 @@ int main() {
 
                     if (!can_draw_from_discard(discard_cursor, active, global_turn_number)) {
                         set_error("Mutare nepermisă! Cartea este blocată sau tura este invalidă.");
+                        selecting_discard = false;
                         continue;
                     }
 
@@ -1540,6 +1541,7 @@ int main() {
                             cursor_c = 14;
                         } else {
                             set_error("Nu poți lua cartea deoarece nu poți forma o etalare validă de minim 45 puncte!");
+                            selecting_discard = false;
                         }
                         continue;
                     }
@@ -1571,6 +1573,9 @@ int main() {
 
                     cursor_r = 0;
                     cursor_c = 14;
+                    is_holding = true;
+                    held_r = 0;
+                    held_c = 14;
                 } else if (ch == 'x' || ch == 'X') {
                     selecting_discard = false;
                     cursor_on_board_during_draw = true;
