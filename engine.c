@@ -6,6 +6,10 @@
 Tile discard_pile[TOTAL_TILES];
 int discard_count = 0;
 
+// Variables task G1
+int global_turn_number = 1;
+int first_discard_tile_id = -1;
+
 void init_deck(Deck *deck) {
     int tile_index = 0;
 
@@ -41,7 +45,6 @@ void init_deck(Deck *deck) {
     deck->size = TOTAL_TILES;
 }
 
-// shuffle logic
 void shuffle_deck(Deck *deck) {
     srand((unsigned int)time(NULL));
 
@@ -54,7 +57,6 @@ void shuffle_deck(Deck *deck) {
     }
 }
 
-// gives tiles to players
 void deal_hands(Deck *deck, Player players[], int num_players, int starting_player_idx) {
     for (int i = 0; i < num_players; i++) {
         players[i].tile_count = 0;
@@ -62,9 +64,9 @@ void deal_hands(Deck *deck, Player players[], int num_players, int starting_play
         players[i].drew_from_discard_this_turn = false;
         players[i].primary_discard_drawn_tile.id = -1;
         players[i].score = 0;
+        players[i].melded_this_turn = false; // Initializare G1
     }
 
-    // Deal 14 tiles alternating
     for (int i = 0; i < 14; i++) {
         for (int p = 0; p < num_players; p++) {
             deck->size--;
@@ -73,13 +75,11 @@ void deal_hands(Deck *deck, Player players[], int num_players, int starting_play
         }
     }
 
-    // Give 15th tile to the starting player
     deck->size--;
     players[starting_player_idx].hand[players[starting_player_idx].tile_count] = deck->tiles[deck->size];
     players[starting_player_idx].tile_count++;
 }
 
-// Moves the top tile from the deck to the player's hand
 void draw_from_deck(Deck *deck, Player *player) {
     if (deck->size > 0 && player->tile_count < 20) {
         deck->size--;
@@ -88,30 +88,29 @@ void draw_from_deck(Deck *deck, Player *player) {
     }
 }
 
-// Removes a tile from hand, shifts array, and adds to discard pile
 void discard_tile(Player *player, int hand_index, Tile discard_pile[], int *discard_count) {
-    // Validate index
     if (hand_index >= 0 && hand_index < player->tile_count) {
-
-        // Push to discard pile
         discard_pile[*discard_count] = player->hand[hand_index];
+        
+        // Salvare prima carte decartata
+        if (*discard_count == 0) {
+            first_discard_tile_id = discard_pile[0].id;
+        }
+        
         (*discard_count)++;
 
-        // Shift remaining tiles left to fill the gap
         for (int i = hand_index; i < player->tile_count - 1; i++) {
             player->hand[i] = player->hand[i + 1];
         }
-
         player->tile_count--;
     }
 }
 
 
 // ====================================================================
-// LOGICA PENTRU VALIDAREA FORMAȚIILOR (TERȚE ȘI SUITE) ȘI A MESEI
+// LOGICA PENTRU VALIDAREA FORMATIILOR (TERTE SI SUITE) SI A MESEI
 // ====================================================================
 
-// Funcție pentru Terță (Grup: 1-1-1)
 bool is_valid_group(Tile tiles[], int count) {
     if (count < 3 || count > 4) return false;
 
@@ -139,7 +138,6 @@ bool is_valid_group(Tile tiles[], int count) {
     return true;
 }
 
-// Helper pentru Suită
 bool check_sequence_gaps(int nums[], int num_count, int jokers_available) {
     int jokers_needed = 0;
     for (int i = 1; i < num_count; i++) {
@@ -150,7 +148,6 @@ bool check_sequence_gaps(int nums[], int num_count, int jokers_available) {
     return jokers_needed <= jokers_available;
 }
 
-// Funcție pentru Suită (Run: 1-2-3-...)
 bool is_valid_run(Tile tiles[], int count) {
     if (count < 3 || count > 14) return false;
 
@@ -211,15 +208,65 @@ bool is_valid_meld(Tile tiles[], int count) {
     return is_valid_group(tiles, count) || is_valid_run(tiles, count);
 }
 
+// Noua logică de sortare pentru a accepta 10-11-12-13-1 și plasarea Joker-ului
 void sort_run(Tile tiles[], int count) {
+    bool has_thirteen = false;
+    bool has_one = false;
+    
+    for (int i = 0; i < count; i++) {
+        if (tiles[i].number == 13) has_thirteen = true;
+        if (tiles[i].number == 1) has_one = true;
+    }
+    
+    bool ace_high = (has_one && has_thirteen);
+    int sort_vals[14];
+    
+    for (int i = 0; i < count; i++) {
+        if (tiles[i].number == 0) sort_vals[i] = -1;
+        else if (tiles[i].number == 1 && ace_high) sort_vals[i] = 14;
+        else sort_vals[i] = tiles[i].number;
+    }
+    
+    // Sortare piese non-joker
     for (int i = 0; i < count - 1; i++) {
         for (int j = 0; j < count - i - 1; j++) {
-            // Sortare simplă crescătoare (fără să stricăm Jokerii)
-            if (tiles[j].number > tiles[j+1].number) {
+            if (sort_vals[j] == -1 || sort_vals[j+1] == -1) continue;
+            if (sort_vals[j] > sort_vals[j+1]) {
                 Tile temp = tiles[j];
                 tiles[j] = tiles[j+1];
                 tiles[j+1] = temp;
+                
+                int tmp_v = sort_vals[j];
+                sort_vals[j] = sort_vals[j+1];
+                sort_vals[j+1] = tmp_v;
             }
+        }
+    }
+    
+    // Plasare Joker in gol
+    for (int i = 0; i < count; i++) {
+        if (tiles[i].number == 0) {
+            Tile joker = tiles[i];
+            for (int k = i; k < count - 1; k++) {
+                tiles[k] = tiles[k+1];
+                sort_vals[k] = sort_vals[k+1];
+            }
+            int insert_pos = count - 1;
+            for (int k = 0; k < count - 2; k++) {
+                if (sort_vals[k] != -1 && sort_vals[k+1] != -1) {
+                    if (sort_vals[k+1] - sort_vals[k] > 1) {
+                        insert_pos = k + 1;
+                        break;
+                    }
+                }
+            }
+            for (int k = count - 1; k > insert_pos; k--) {
+                tiles[k] = tiles[k-1];
+                sort_vals[k] = sort_vals[k-1];
+            }
+            tiles[insert_pos] = joker;
+            sort_vals[insert_pos] = -1;
+            break;
         }
     }
 }
@@ -250,12 +297,21 @@ void draw_from_discard(Tile discard_pile[], int *discard_count, Player *player) 
     }
 }
 
+// NOU G2: Validare extragere din decartare
+bool can_draw_from_discard(int discard_index, const Player *player, int turn_number) {
+    if (turn_number == 1) return false; // Nicio tragere in tura 1
+    if (discard_count > 0 && discard_index < discard_count) {
+        if (discard_pile[discard_index].id == first_discard_tile_id) return false; // Prima carte blocata permanent
+    }
+    if (!player->has_melded && discard_index != discard_count - 1) return false; // Neetalat -> doar ultima carte
+    return true;
+}
+
 
 // ====================================================================
-// SCOR, REGULA DE 45 DE PUNCTE (DINAMIC) ȘI VICTORIE
+// SCOR, REGULA DE 45 DE PUNCTE (DINAMIC) SI VICTORIE
 // ====================================================================
 
-// Calculează punctele rămase în mâna jucătorului
 int calculate_hand_points(Player *player) {
     int total = 0;
     for (int i = 0; i < player->tile_count; i++) {
@@ -264,7 +320,6 @@ int calculate_hand_points(Player *player) {
     return total;
 }
 
-// Calculează valoarea dinamică a unei formații DOAR PENTRU COBORÂRE
 int calculate_meld_points(Tile tiles[], int count) {
     if (is_valid_group(tiles, count)) {
         int num = -1;
@@ -274,7 +329,7 @@ int calculate_meld_points(Tile tiles[], int count) {
                 break;
             }
         }
-        if (num == 1) return count * 10; // Regula: 1-1-1 = 30 pct
+        if (num == 1) return count * 10; 
         if (num >= 10) return count * 10;
         return count * 5;
     }
@@ -289,7 +344,6 @@ int calculate_meld_points(Tile tiles[], int count) {
         bool one_is_high = (has_one && has_thirteen);
 
         int resolved[14] = {0};
-        // Setăm valorile reale
         for (int i = 0; i < count; i++) {
             if (tiles[i].number != 0) {
                 resolved[i] = tiles[i].number;
@@ -297,17 +351,14 @@ int calculate_meld_points(Tile tiles[], int count) {
             }
         }
         
-        // Deducem valoarea Jokerilor în funcție de vecinii lor
         for (int i = 0; i < count; i++) {
             if (resolved[i] == 0) {
-                // Căutăm la dreapta
                 for (int j = i + 1; j < count; j++) {
                     if (resolved[j] != 0) {
                         resolved[i] = resolved[j] - (j - i);
                         break;
                     }
                 }
-                // Căutăm la stânga dacă nu am găsit
                 if (resolved[i] == 0) {
                     for (int j = i - 1; j >= 0; j--) {
                         if (resolved[j] != 0) {
@@ -319,7 +370,6 @@ int calculate_meld_points(Tile tiles[], int count) {
             }
         }
 
-        // Calculăm punctele totale
         int total = 0;
         for (int i = 0; i < count; i++) {
             if (resolved[i] >= 10) total += 10;
@@ -330,29 +380,23 @@ int calculate_meld_points(Tile tiles[], int count) {
     return 0;
 }
 
-// Verifică dacă o singură formație atinge 45 de puncte și este SUITĂ
 bool check_initial_meld(Tile tiles[], int count) {
     if (!is_valid_meld(tiles, count)) return false;
     if (!is_valid_run(tiles, count)) return false;
-    
     return calculate_meld_points(tiles, count) >= 45;
 }
 
-// Verifică dacă mai multe formații cumulate ating 45 de puncte și conțin MINIM O SUITĂ
 bool check_initial_melds(Meld staged[], int meld_count) {
     int total = 0;
     bool has_run = false;
 
     for (int m = 0; m < meld_count; m++) {
         if (!is_valid_meld(staged[m].tiles, staged[m].count)) return false;
-        
         if (is_valid_run(staged[m].tiles, staged[m].count)) {
             has_run = true;
         }
-        
         total += calculate_meld_points(staged[m].tiles, staged[m].count);
     }
-    
     return (total >= 45 && has_run);
 }
 
@@ -383,11 +427,18 @@ void remove_tiles_from_hand(Player *player, int indices[], int num_indices) {
 
 
 // ====================================================================
-// EXECUTAREA MUTĂRILOR (ETALARE INIȚIALĂ ȘI LIPITURI)
+// EXECUTAREA MUTARILOR (ETALARE INITIALA SI LIPITURI)
 // ====================================================================
 
+// NOU G6: Jucatorul nu poate ramane cu 0 piese in mana dupa etalare
+bool can_place_meld_without_emptying(const Player *player, int tiles_to_remove) {
+    return (player->tile_count - tiles_to_remove) >= 1;
+}
+
 bool play_initial_melds(Player *player, Table *table, Meld staged[], int meld_count, int hand_indices[], int num_indices, int player_idx) {
+    if (global_turn_number == 1) return false; // Nicio coborare in tura 1 (G2)
     if (player->has_melded == true) return false; 
+    if (!can_place_meld_without_emptying(player, num_indices)) return false; // Pastrare minim 1 carte (G6)
 
     if (check_initial_melds(staged, meld_count)) {
         int earned_points = 0;
@@ -397,6 +448,7 @@ bool play_initial_melds(Player *player, Table *table, Meld staged[], int meld_co
         }
         remove_tiles_from_hand(player, hand_indices, num_indices);
         player->has_melded = true;
+        player->melded_this_turn = true; // Setat pt restrictia G4
         player->score += earned_points;
         return true; 
     }
@@ -421,13 +473,12 @@ bool add_tile_to_meld(Table *table, int meld_index, Tile tile) {
 }
 
 bool play_lipitura(Player *player, Table *table, int meld_index, int hand_index) {
+    if (player->melded_this_turn) return false; // Nicio lipire in tura etalarii (G4)
     if (player->has_melded == false) return false; 
-
     if (hand_index < 0 || hand_index >= player->tile_count) return false;
 
     Tile tile_to_play = player->hand[hand_index];
 
-    // REGULA TA SPECIFICĂ: Interzicem folosirea piesei de bază luate de jos la lipituri!
     if (player->drew_from_discard_this_turn && tile_to_play.id == player->primary_discard_drawn_tile.id) {
         return false; 
     }
@@ -440,8 +491,62 @@ bool play_lipitura(Player *player, Table *table, int meld_index, int hand_index)
     return false; 
 }
 
+
 // ====================================================================
-// NOU: FUNCTII DE VALIDARE EXTRAGERE DECARTARE PENTRU MAIN
+// NOU G5: TRAGERE DIN DECARTARE CU AUTO-ETALARE PT NEETALATI
+// ====================================================================
+bool attempt_auto_meld_from_discard(Player *player, Table *table, int player_idx) {
+    if (player->has_melded) return false;
+    if (discard_count <= 0) return false;
+    
+    Tile candidate = discard_pile[discard_count - 1];
+    Tile temp_hand[21];
+    int temp_count = player->tile_count;
+    for (int i = 0; i < temp_count; i++) temp_hand[i] = player->hand[i];
+    temp_hand[temp_count] = candidate;
+    temp_count++;
+    
+    Meld split_melds[5];
+    int num_splits = split_unordered_melds(temp_hand, temp_count, split_melds);
+    
+    if (num_splits > 0 && check_initial_melds(split_melds, num_splits)) {
+        discard_count--;
+        player->hand[player->tile_count] = candidate;
+        player->tile_count++;
+        
+        int earned = 0;
+        for (int i = 0; i < num_splits; i++) {
+            place_meld(table, split_melds[i].tiles, split_melds[i].count, player_idx);
+            earned += calculate_meld_points(split_melds[i].tiles, split_melds[i].count);
+        }
+        
+        bool used[21] = {false};
+        for (int m = 0; m < num_splits; m++) {
+            for (int t = 0; t < split_melds[m].count; t++) {
+                for (int h = 0; h < player->tile_count; h++) {
+                    if (!used[h] && player->hand[h].id == split_melds[m].tiles[t].id) {
+                        used[h] = true;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        int new_count = 0;
+        for (int h = 0; h < player->tile_count; h++) {
+            if (!used[h]) player->hand[new_count++] = player->hand[h];
+        }
+        player->tile_count = new_count;
+        player->has_melded = true;
+        player->melded_this_turn = true;
+        player->score += earned;
+        return true;
+    }
+    return false;
+}
+
+// ====================================================================
+// VALIDARE EXTRAGERE DECARTARE
 // ====================================================================
 
 bool is_tile_in_hand(const Player *player, int tile_id) {
@@ -451,7 +556,6 @@ bool is_tile_in_hand(const Player *player, int tile_id) {
     return false;
 }
 
-// Întoarce true dacă regulile sunt respectate, false dacă piesa extrasă e încă în mână
 bool validate_discard_rules(const Player *player) {
     if (player->drew_from_discard_this_turn) {
         if (is_tile_in_hand(player, player->primary_discard_drawn_tile.id)) {
@@ -481,7 +585,6 @@ void partition_unordered_recursive(Tile pool[], int pool_size, Meld current_part
 
     int num_subsets = 1 << pool_size;
     for (int mask = 1; mask < num_subsets; mask++) {
-        // Force the first tile of the pool to be in the subset to avoid duplicate partitions
         if (!(mask & 1)) continue;
 
         int len = 0;
@@ -500,7 +603,7 @@ void partition_unordered_recursive(Tile pool[], int pool_size, Meld current_part
         if (is_valid_group(subset, len)) {
             valid = true;
         } else if (is_valid_run(subset, len)) {
-            sort_run(subset, len); // Sort the run correctly
+            sort_run(subset, len); 
             valid = true;
         }
 
@@ -539,5 +642,5 @@ int split_unordered_melds(Tile input[], int count, Meld output_melds[]) {
         return best_partition_size;
     }
     
-    return 0; // Failed to partition
+    return 0;
 }

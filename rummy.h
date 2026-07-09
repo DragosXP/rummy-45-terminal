@@ -45,18 +45,19 @@ typedef struct {
     bool drew_from_discard_this_turn;
     Tile primary_discard_drawn_tile;
     int score;
+    bool melded_this_turn; // Devine true cand jucatorul coboara formatii in tura curenta
 } Player;
 
 #define MAX_PLAYERS 4
 
-// O singură formație de pe masă (suită sau grup)
+// O singura formatie de pe masa (suita sau grup)
 typedef struct {
-    Tile tiles[13];   // maxim 13 piese într-o suită
-    int  count;       // câte piese se află în această formație
+    Tile tiles[13];   // maxim 13 piese intr-o suita
+    int  count;       // cate piese se afla in aceasta formatie
     int  owner_id;    // id-ul jucatorului care a plasat formatia
 } Meld;
 
-// Masa comună unde se află toate formațiile jucate
+// Masa comuna unde se afla toate formatiile jucate
 #define MAX_MELDS 50
 typedef struct {
     Meld melds[MAX_MELDS];
@@ -67,6 +68,10 @@ typedef struct {
 extern Tile discard_pile[TOTAL_TILES];
 extern int discard_count;
 
+// Globals adaugate
+extern int global_turn_number;
+extern int first_discard_tile_id;
+
 // Function declarations
 void init_deck(Deck *deck);
 void shuffle_deck(Deck *deck);
@@ -74,15 +79,15 @@ void deal_hands(Deck *deck, Player players[], int num_players, int starting_play
 void draw_from_deck(Deck *deck, Player *player);
 void discard_tile(Player *player, int hand_index, Tile discard_pile[], int *discard_count);
 
-// Validarea formațiilor (Meld validation)
+// Validarea formatiilor (Meld validation)
 bool is_valid_group(Tile tiles[], int count);
 bool is_valid_run(Tile tiles[], int count);
 bool is_valid_meld(Tile tiles[], int count);
 
-// Funcție folosită de main.c pentru a sorta vizual o suită pe masă
+// Functie folosita de main.c pentru a sorta vizual o suita pe masa
 void sort_run(Tile tiles[], int count);
 
-// Operațiunile mesei (Table operations)
+// Operatiunile mesei (Table operations)
 void init_table(Table *table);
 bool place_meld(Table *table, Tile tiles[], int count, int owner_id);
 
@@ -93,28 +98,33 @@ void draw_from_discard(Tile discard_pile[], int *discard_count, Player *player);
 bool play_initial_melds(Player *player, Table *table, Meld staged[], int meld_count, int hand_indices[], int num_indices, int player_idx);
 int split_unordered_melds(Tile input[], int count, Meld output_melds[]);
 
-// Funcția de bază pentru a testa o lipitură
+// Functia de baza pentru a testa o lipitura
 bool add_tile_to_meld(Table *table, int meld_index, Tile tile);
 
-// Funcția completă care aplică lipitura (inclusiv restricția și scoaterea din mână)
+// Functia completa care aplica lipitura (inclusiv restrictia si scoaterea din mana)
 bool play_lipitura(Player *player, Table *table, int meld_index, int hand_index);
 
-// Calcularea punctelor din mână (Scoring)
+// Calcularea punctelor din mana (Scoring)
 int calculate_hand_points(Player *player);
 
-// Verificarea etalării inițiale (piesele trebuie să aibă >= 45 puncte)
+// Verificarea etalarii initiale (piesele trebuie sa aiba >= 45 puncte)
 bool check_initial_meld(Tile tiles[], int count);
 
-// Verificarea etalării inițiale pentru mai multe formații simultan
+// Verificarea etalarii initiale pentru mai multe formatii simultan
 bool check_initial_melds(Meld staged[], int meld_count);
 
-// Condiția de victorie
+// Conditia de victorie
 bool has_player_won(Player *player);
 
-// Eliminarea pieselor specifice din mâna jucătorului (când le pune pe masă)
+// Eliminarea pieselor specifice din mana jucatorului (cand le pune pe masa)
 void remove_tiles_from_hand(Player *player, int indices[], int num_indices);
 
 // Validarea regulilor pentru tragerea din decartare
 bool validate_discard_rules(const Player *player);
+
+// NOU: Functii implementate
+bool can_draw_from_discard(int discard_index, const Player *player, int turn_number);
+bool attempt_auto_meld_from_discard(Player *player, Table *table, int player_idx);
+bool can_place_meld_without_emptying(const Player *player, int tiles_to_remove);
 
 #endif
