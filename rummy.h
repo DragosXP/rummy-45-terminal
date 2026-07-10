@@ -48,6 +48,7 @@ typedef struct {
     bool melded_this_turn; // Devine true cand jucatorul coboara formatii in tura curenta
     int pending_jokers_to_place_face_down; // Numarul de jokeri care trebuie plasati cu fata in jos in aceasta tura
     bool drew_atu_this_turn;
+    char username[11]; // Username-ul jucatorului (max 10 caractere + null terminator)
 } Player;
 
 #define MAX_PLAYERS 4
