@@ -16,6 +16,7 @@ bool saved_select_deck[MAX_PLAYERS];
 Tile atuu_tile;
 int initial_atu_owner = -1;
 bool swap_pending[MAX_PLAYERS] = {false};
+bool atu_taken = false;
 int swap_tile_c[MAX_PLAYERS] = {0};
 int swap_tile_r[MAX_PLAYERS] = {0};
 int player_count = 4; // Default to 4 players
@@ -23,6 +24,16 @@ int deck_pile_sizes[20];
 bool meld_selection_mode = false;
 bool cursor_on_board_during_draw = false;
 int attach_side = 0; // 0 = Left, 1 = Right
+
+GameState state = STATE_DRAW;
+bool is_holding = false;
+int held_r = -1;
+int held_c = -1;
+bool selecting_discard = false;
+int discard_cursor = 0;
+int discard_view_start = 0;
+bool select_deck = true;
+bool selecting_atu = false;
 
 extern void sort_run(Tile tiles[], int count);
 int extract_selected_melds(int player_idx, Meld staged[], int *staged_count, int to_clear_r[][30], int to_clear_c[][30], int to_clear_cnt[]);
@@ -47,40 +58,126 @@ void set_error(const char *msg) {
     global_has_error = true;
 }
 
-void show_winner_screen(int winner_idx, Player players[]) {
-    bool winner_had_atu = (winner_idx == initial_atu_owner);
-    int original_score = players[winner_idx].score;
-    if (winner_had_atu) {
-        players[winner_idx].score += 50;
+void show_end_game_screen(int winner_idx, bool deck_empty, Player players[], Table *table) {
+    // 1. Calculate scores
+    int final_scores[MAX_PLAYERS] = {0};
+    int table_points[MAX_PLAYERS] = {0};
+    int hand_penalties[MAX_PLAYERS] = {0};
+    bool has_atu[MAX_PLAYERS] = {false};
+    
+    bool is_joc_dublu = (atuu_tile.number == 1 || atuu_tile.number == 0);
+    bool winner_closed_double = false;
+    
+    if (!deck_empty && winner_idx != -1 && discard_count > 0) {
+        Tile closing_tile = discard_pile[discard_count - 1];
+        winner_closed_double = (closing_tile.number == 1 || closing_tile.number == 0);
     }
-
+    
+    for (int p = 0; p < player_count; p++) {
+        has_atu[p] = (p == initial_atu_owner);
+        
+        if (!players[p].has_melded) {
+            // Unmelded penalty: -100 points, hand points not counted
+            int base = -100;
+            if (has_atu[p]) {
+                base += 50; // Atu bonus is still added
+            }
+            if (is_joc_dublu) {
+                base *= 2;
+            }
+            final_scores[p] = base;
+        } else {
+            // Count table points (staged melds + attachments owned by this player)
+            int t_pts = 0;
+            for (int m = 0; m < table->meld_count; m++) {
+                Meld *meld = &table->melds[m];
+                for (int t = 0; t < meld->count; t++) {
+                    if (meld->tile_owner[t] == p) {
+                        int num = meld->tiles[t].number;
+                        if (num == 0) t_pts += 50; // Joly
+                        else if (num == 1) t_pts += 25; // 1
+                        else if (num >= 10) t_pts += 10; // 10-13
+                        else t_pts += 5; // 2-9
+                    }
+                }
+            }
+            table_points[p] = t_pts;
+            hand_penalties[p] = calculate_hand_points(&players[p]);
+            
+            int base_score = t_pts - hand_penalties[p];
+            if (!deck_empty && p == winner_idx) {
+                base_score += 50; // Closing bonus
+            }
+            if (has_atu[p]) {
+                base_score += 50; // Atu bonus
+            }
+            
+            // Apply multipliers
+            int multiplier = 1;
+            if (is_joc_dublu) multiplier *= 2;
+            if (!deck_empty && p == winner_idx && winner_closed_double) multiplier *= 2;
+            
+            final_scores[p] = base_score * multiplier;
+        }
+    }
+    
+    // 2. Render screen
     clear();
-    attron(COLOR_PAIR(7) | A_BOLD);
-    mvprintw(10, 30, "╔══════════════════════════════════════╗");
-    mvprintw(11, 30, "║   FELICITĂRI! Ai câștigat jocul!     ║");
-    mvprintw(12, 30, "╚══════════════════════════════════════╝");
-    attroff(COLOR_PAIR(7) | A_BOLD);
+    if (deck_empty) {
+        attron(COLOR_PAIR(3) | A_BOLD);
+        mvprintw(8, 30, "╔══════════════════════════════════════╗");
+        mvprintw(9, 30, "║  JOC ÎNCHEIAT! Pachetul s-a terminat ║");
+        mvprintw(10, 30, "╚══════════════════════════════════════╝");
+        attroff(COLOR_PAIR(3) | A_BOLD);
+    } else {
+        attron(COLOR_PAIR(7) | A_BOLD);
+        mvprintw(8, 30, "╔══════════════════════════════════════╗");
+        mvprintw(9, 30, "║   FELICITĂRI! Jocul s-a terminat!    ║");
+        mvprintw(10, 30, "╚══════════════════════════════════════╝");
+        attroff(COLOR_PAIR(7) | A_BOLD);
+    }
+    
+    if (is_joc_dublu) {
+        attron(COLOR_PAIR(5) | A_BOLD);
+        mvprintw(12, 30, "⚡ JOC DUBLU! (Atuul a fost %s)", (atuu_tile.number == 0) ? "Joly" : "1");
+        attroff(COLOR_PAIR(5) | A_BOLD);
+    }
+    
+    if (winner_idx != -1 && !deck_empty && winner_closed_double) {
+        attron(COLOR_PAIR(5) | A_BOLD);
+        mvprintw(13, 30, "✨ ÎNCHIDERE CU %s! (Scor înmulțit)", (discard_pile[discard_count - 1].number == 0) ? "JOLY" : "1");
+        attroff(COLOR_PAIR(5) | A_BOLD);
+    }
     
     char usernames[4][11] = {"Dragos715", "0Gabriela0", "KasaneTeto", "Messi"};
     int row = 15;
     attron(COLOR_PAIR(6));
     mvprintw(row++, 30, "── Scoruri Finale ──");
     attroff(COLOR_PAIR(6));
+    
     for (int i = 0; i < player_count; i++) {
-        if (i == winner_idx) {
+        if (!deck_empty && i == winner_idx) {
             attron(COLOR_PAIR(7) | A_BOLD);
-            if (winner_had_atu) {
-                mvprintw(row++, 30, "★ %s: %d + atu = %d puncte (CÂȘTIGĂTOR)", usernames[i], original_score, players[i].score);
-            } else {
-                mvprintw(row++, 30, "★ %s: %d puncte (CÂȘTIGĂTOR)", usernames[i], players[i].score);
-            }
+            mvprintw(row++, 30, "★ %s: %d puncte (CÂȘTIGĂTOR)", usernames[i], final_scores[i]);
+            mvprintw(row++, 32, "(Etalat+Lipit: %d pct | Atu: %s | Inchidere: +50)", 
+                     table_points[i], has_atu[i] ? "+50" : "0");
             attroff(COLOR_PAIR(7) | A_BOLD);
+            row++;
         } else {
-            attron(COLOR_PAIR(3));
-            mvprintw(row++, 30, "  %s: %d pct | Penalizare: -%d pct", usernames[i], players[i].score, calculate_hand_points(&players[i]));
-            attroff(COLOR_PAIR(3));
+            attron(COLOR_PAIR(6));
+            if (!players[i].has_melded) {
+                mvprintw(row++, 30, "  %s: %d pct (Penalizare neetalare %s)", 
+                         usernames[i], final_scores[i], has_atu[i] ? "-100 + 50" : "-100");
+            } else {
+                mvprintw(row++, 30, "  %s: %d pct", usernames[i], final_scores[i]);
+                mvprintw(row++, 32, "(Etalat+Lipit: %d pct | Penalizare tabla: -%d pct | Atu: %s)", 
+                         table_points[i], hand_penalties[i], has_atu[i] ? "+50" : "0");
+            }
+            attroff(COLOR_PAIR(6));
+            row++;
         }
     }
+    
     row += 2;
     attron(COLOR_PAIR(6));
     mvprintw(row, 30, "Apasă orice tastă pentru a ieși...");
@@ -105,6 +202,17 @@ bool is_tile_double(int player_idx, Tile T) {
         }
     }
     return count_same >= 2;
+}
+
+bool player_has_tile_id(int player_idx, int tile_id) {
+    for (int r = 0; r < 2; r++) {
+        for (int c = 0; c < 15; c++) {
+            if (boards[player_idx][r][c].id == tile_id) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 bool is_error_selector_active() {
@@ -297,7 +405,7 @@ void draw_header(Player players[], int current_player, GameState state) {
 }
 
 // Helper function to attach a tile to a specific side of a meld
-bool attach_tile_to_meld_side(Table *table, int meld_idx, Tile tile, int side) {
+bool attach_tile_to_meld_side(Table *table, int meld_idx, Tile tile, int side, int player_idx) {
     if (meld_idx >= 0 && meld_idx < table->meld_count) {
         Meld *meld = &table->melds[meld_idx];
         if (meld->count < 13) {
@@ -305,16 +413,23 @@ bool attach_tile_to_meld_side(Table *table, int meld_idx, Tile tile, int side) {
                 // Shift right and insert at index 0 (LEFT)
                 for (int i = meld->count; i > 0; i--) {
                     meld->tiles[i] = meld->tiles[i - 1];
+                    meld->face_down[i] = meld->face_down[i - 1];
+                    meld->tile_owner[i] = meld->tile_owner[i - 1];
                 }
                 meld->tiles[0] = tile;
+                meld->face_down[0] = true; // Attached tile is placed face down!
+                meld->tile_owner[0] = player_idx;
                 meld->count++;
             } else {
                 // Append to end (RIGHT)
-                meld->tiles[meld->count++] = tile;
+                meld->tiles[meld->count] = tile;
+                meld->face_down[meld->count] = true; // Attached tile is placed face down!
+                meld->tile_owner[meld->count] = player_idx;
+                meld->count++;
             }
             // Sort if it is a run to keep ordering and Joker placement correct
             if (is_valid_run(meld->tiles, meld->count)) {
-                sort_run(meld->tiles, meld->count);
+                sort_run_with_flags(meld->tiles, meld->face_down, meld->tile_owner, meld->count);
             }
             return true;
         }
@@ -429,8 +544,11 @@ bool can_replace_joker(Meld *meld, Tile tile, int *joker_idx) {
     if (tile.id == -1 || tile.number == 0) return false;
     
     if (is_valid_group(meld->tiles, meld->count)) {
+        // Joker cannot be replaced/used in a group of size < 4 (Rule B/C)
+        if (meld->count < 4) return false;
+        
         for (int i = 0; i < meld->count; i++) {
-            if (meld->tiles[i].number == 0) {
+            if (meld->tiles[i].number == 0 && !meld->face_down[i]) {
                 Tile temp[15];
                 for (int j = 0; j < meld->count; j++) {
                     temp[j] = (j == i) ? tile : meld->tiles[j];
@@ -445,7 +563,7 @@ bool can_replace_joker(Meld *meld, Tile tile, int *joker_idx) {
     
     if (is_valid_run(meld->tiles, meld->count)) {
         for (int i = 0; i < meld->count; i++) {
-            if (meld->tiles[i].number == 0) {
+            if (meld->tiles[i].number == 0 && !meld->face_down[i]) {
                 Tile temp[15];
                 for (int j = 0; j < meld->count; j++) {
                     temp[j] = (j == i) ? tile : meld->tiles[j];
@@ -591,6 +709,7 @@ void draw_shared_table(Table *table, bool is_holding, int cursor_r, int cursor_c
 
         // Construct the list of tiles to draw
         Tile draw_tiles[20];
+        bool draw_face_down[20] = {false};
         int draw_count = 0;
         int active_tile_idx = -1;
 
@@ -598,9 +717,11 @@ void draw_shared_table(Table *table, bool is_holding, int cursor_r, int cursor_c
             if (attach_side == 0) {
                 // LEFT attachment: preview card at index 0, shift others right
                 draw_tiles[0] = active_tile;
+                draw_face_down[0] = true; // Attached tile preview is face down
                 active_tile_idx = 0;
                 for (int i = 0; i < meld->count; i++) {
                     draw_tiles[i + 1] = meld->tiles[i];
+                    draw_face_down[i + 1] = meld->face_down[i];
                 }
                 draw_count = meld->count + 1;
                 start_c = start_c - 3; // Shift start column left to make space
@@ -608,14 +729,17 @@ void draw_shared_table(Table *table, bool is_holding, int cursor_r, int cursor_c
                 // RIGHT attachment: preview card at the end
                 for (int i = 0; i < meld->count; i++) {
                     draw_tiles[i] = meld->tiles[i];
+                    draw_face_down[i] = meld->face_down[i];
                 }
                 draw_tiles[meld->count] = active_tile;
+                draw_face_down[meld->count] = true; // Attached tile preview is face down
                 active_tile_idx = meld->count;
                 draw_count = meld->count + 1;
             }
         } else {
             for (int i = 0; i < meld->count; i++) {
                 draw_tiles[i] = meld->tiles[i];
+                draw_face_down[i] = meld->face_down[i];
             }
             draw_count = meld->count;
         }
@@ -698,12 +822,19 @@ void draw_shared_table(Table *table, bool is_holding, int cursor_r, int cursor_c
                     actual_idx = draw_count - (7 - t);
                 }
                 Tile tile = draw_tiles[actual_idx];
-                int cp = (tile.number == 0) ? 5 : tile.color + 1;
+                bool is_fd = draw_face_down[actual_idx];
+                if (is_fd) {
+                    attron(COLOR_PAIR(6) | A_DIM);
+                    printw("XX");
+                    attroff(COLOR_PAIR(6) | A_DIM);
+                } else {
+                    int cp = (tile.number == 0) ? 5 : tile.color + 1;
 
-                attron(COLOR_PAIR(cp) | A_BOLD);
-                if (tile.number == 0) printw(":)");
-                else printw("%2d", tile.number);
-                attroff(COLOR_PAIR(cp) | A_BOLD);
+                    attron(COLOR_PAIR(cp) | A_BOLD);
+                    if (tile.number == 0) printw(":)");
+                    else printw("%2d", tile.number);
+                    attroff(COLOR_PAIR(cp) | A_BOLD);
+                }
 
                 int sep_pair = (t == limit_draw - 1) ? right_pair : 
                                ((t == active_tile_idx || t + 1 == active_tile_idx) ? 7 : 6);
@@ -885,7 +1016,7 @@ void draw_discard_pile(int cursor_index, int view_start, bool is_selecting_disca
 }
 
 // Renders the deck piles and trump card (atuu) at rows 17-24
-void draw_deck_piles(int deck_size, bool is_deck_selected) {
+void draw_deck_piles(int deck_size, bool is_deck_selected, bool is_atu_selected) {
     // Clear rows 17-25
     for (int r = 17; r <= 25; r++) {
         mvprintw(r, 0, "                                                                                                      ");
@@ -918,7 +1049,7 @@ void draw_deck_piles(int deck_size, bool is_deck_selected) {
 
         if (size <= 0) continue;
 
-        bool is_highlighted = (is_deck_selected && col_idx == active_pile_idx);
+        bool is_highlighted = (is_deck_selected && col_idx == active_pile_idx) || (is_atu_selected && col_idx == last_active_idx);
 
         // Height levels representing card pile thickness
         int height = size;
@@ -940,7 +1071,7 @@ void draw_deck_piles(int deck_size, bool is_deck_selected) {
 
         // Center card row (trump is at the top of the last active pile, others face down)
         int body_border_pair = is_highlighted ? 7 : 6;
-        if (col_idx == last_active_idx) {
+        if (col_idx == last_active_idx && !atu_taken) {
             // Last column contains the trump card (atuu_tile)
             int cp = (atuu_tile.number == 0) ? 5 : atuu_tile.color + 1;
             attron(COLOR_PAIR(body_border_pair));
@@ -1268,6 +1399,7 @@ int extract_selected_melds(int player_idx, Meld staged[], int *staged_count, int
         staged[0].count = ordered_count;
         for(int i = 0; i < ordered_count; i++) {
             staged[0].tiles[i] = ordered_tiles[i];
+            staged[0].face_down[i] = false;
         }
         *staged_count = 1;
         return -3; // Invalid
@@ -1332,7 +1464,16 @@ int play_selected_meld(int player_idx, Player *player, Table *table) {
     int earned_points = 0;
     
     for (int i = 0; i < staged_count; i++) {
-        place_meld(table, staged[i].tiles, staged[i].count, player_idx);
+        staged[i].owner_id = player_idx;
+        for (int t = 0; t < staged[i].count; t++) {
+            if (staged[i].tiles[t].number == 0 && player->pending_jokers_to_place_face_down > 0) {
+                staged[i].face_down[t] = true;
+                player->pending_jokers_to_place_face_down--;
+            } else {
+                staged[i].face_down[t] = false;
+            }
+        }
+        place_meld(table, &staged[i]);
         earned_points += calculate_meld_points(staged[i].tiles, staged[i].count);
         
         // Ștergem piesele de pe tabla privată
@@ -1373,7 +1514,8 @@ void open_debug_menu(Player players[], Table *table, Deck *deck, int current_pla
     mvprintw(12, 5, "9. Adaugă o formație de 8 cărți în mâna fiecărui jucător");
     mvprintw(13, 5, "10. Adaugă o formație de 8 cărți pe masa comună pentru fiecare jucător");
     mvprintw(14, 5, "11. [FULL TEST] Simulare joc în curs - testează TOATE funcționalitățile");
-    mvprintw(16, 5, "Alege o opțiune [1-11]: ");
+    mvprintw(15, 5, "12. [FULL TEST 2] Simulare cu 3 piese în mână, Joker și scor dublu");
+    mvprintw(17, 5, "Alege o opțiune [1-12]: ");
     refresh();
 
     int ch;
@@ -1435,6 +1577,7 @@ void open_debug_menu(Player players[], Table *table, Deck *deck, int current_pla
         table->meld_count = 0; // Clear existing table melds first
 
         Meld mock_melds[30];
+        memset(mock_melds, 0, sizeof(mock_melds));
         
         // 1. Blue Run: 10, 11, 12
         mock_melds[0].count = 3;
@@ -1666,6 +1809,7 @@ void open_debug_menu(Player players[], Table *table, Deck *deck, int current_pla
             players[p].has_melded = true;
             players[p].melded_this_turn = false;
             players[p].drew_from_discard_this_turn = false;
+            players[p].pending_jokers_to_place_face_down = 0;
             players[p].score = 45;
         }
 
@@ -1758,6 +1902,139 @@ void open_debug_menu(Player players[], Table *table, Deck *deck, int current_pla
         mvprintw(16, 5, "[FULL TEST] Joc în curs simulat! Toți jucătorii sunt etalați.");
         refresh();
         napms(1800);
+    } else if (ch == 12) {
+        // ============================================================
+        // OPTION 12: Advanced mid-game simulation (Double game, Atu swap, 3 tiles in hand)
+        // ============================================================
+        // 1. Advance turn counter past first-round restriction
+        if (global_turn_number <= player_count) {
+            global_turn_number = player_count + 2;
+        }
+
+        // 2. Set Trump (Atu) to 1 to make it a Double Game (Joc Dublu)
+        atuu_tile = (Tile){ .id = 999, .number = 1, .color = RED, .points = 25 };
+        atu_taken = false;
+        initial_atu_owner = 1; // Player 2 has the Atu initially
+
+        // 3. Clear all boards
+        for (int p = 0; p < player_count; p++) {
+            for (int r = 0; r < 2; r++) {
+                for (int c = 0; c < 15; c++) {
+                    boards[p][r][c].id = -1;
+                    boards[p][r][c].number = -1;
+                    selected_tiles[p][r][c] = false;
+                }
+            }
+            board_stack_count[p] = 0;
+            players[p].melded_this_turn = false;
+            players[p].drew_from_discard_this_turn = false;
+            players[p].drew_atu_this_turn = false;
+            players[p].pending_jokers_to_place_face_down = 0;
+        }
+
+        // 4. Configure player hand/board counts
+        int cp = current_player;
+        players[cp].has_melded = true;
+        players[cp].tile_count = 3; // EXACTLY 3 cards!
+        
+        // Card 1: Red 9 (to replace Joker in Meld 0 of size 4)
+        boards[cp][0][0] = (Tile){ .id = 7000, .number = 9, .color = RED, .points = 5 };
+        // Card 2: Blue 10 (to attach on run Meld 1)
+        boards[cp][0][1] = (Tile){ .id = 7001, .number = 10, .color = BLUE, .points = 10 };
+        // Card 3: Yellow 5 (to attempt Joker replacement on size 3 Meld 2 - blocked)
+        boards[cp][0][2] = (Tile){ .id = 7002, .number = 5, .color = YELLOW, .points = 5 };
+        
+        sync_board_to_player(cp, active);
+
+        // Configure other players
+        // Player 1 (Atu owner, unmelded)
+        int p1_idx = (cp + 1) % player_count;
+        players[p1_idx].has_melded = false;
+        players[p1_idx].tile_count = 6;
+        for (int k = 0; k < 6; k++) {
+            boards[p1_idx][0][k] = (Tile){ .id = 7100 + k, .number = 4 + k, .color = RED, .points = 5 };
+        }
+        sync_board_to_player(p1_idx, &players[p1_idx]);
+
+        // Player 2 (Melded, hand size 2 -> discard draw blocked)
+        int p2_idx = (cp + 2) % player_count;
+        players[p2_idx].has_melded = true;
+        players[p2_idx].tile_count = 2;
+        boards[p2_idx][0][0] = (Tile){ .id = 7200, .number = 6, .color = BLUE, .points = 5 };
+        boards[p2_idx][0][1] = (Tile){ .id = 7201, .number = 7, .color = BLUE, .points = 5 };
+        sync_board_to_player(p2_idx, &players[p2_idx]);
+
+        // Player 3 (Melded, hand size 5 -> can draw & break normally)
+        int p3_idx = (cp + 3) % player_count;
+        players[p3_idx].has_melded = true;
+        players[p3_idx].tile_count = 5;
+        for (int k = 0; k < 5; k++) {
+            boards[p3_idx][0][k] = (Tile){ .id = 7300 + k, .number = 10, .color = BLACK, .points = 10 };
+        }
+        sync_board_to_player(p3_idx, &players[p3_idx]);
+
+        // 5. Shared Table:
+        table->meld_count = 0;
+        
+        // Meld 0: Group of size 4 containing Joly (BLUE, YELLOW, BLACK 9s + JOLY). Swappable with RED 9.
+        table->melds[0].count = 4;
+        table->melds[0].owner_id = p3_idx;
+        table->melds[0].tiles[0] = (Tile){ .id = 8000, .number = 9, .color = BLUE, .points = 10 };
+        table->melds[0].tiles[1] = (Tile){ .id = 8001, .number = 9, .color = YELLOW, .points = 10 };
+        table->melds[0].tiles[2] = (Tile){ .id = 8002, .number = 9, .color = BLACK, .points = 10 };
+        table->melds[0].tiles[3] = (Tile){ .id = 8003, .number = 0, .color = JOKER_COLOR, .points = 50 };
+        table->melds[0].face_down[0] = false;
+        table->melds[0].face_down[1] = false;
+        table->melds[0].face_down[2] = false;
+        table->melds[0].face_down[3] = false;
+        for (int k = 0; k < 4; k++) table->melds[0].tile_owner[k] = p3_idx;
+        table->meld_count++;
+
+        // Meld 1: Run of BLUE 7, BLUE 8, BLUE 9. Attachable on right: BLUE 10.
+        table->melds[1].count = 3;
+        table->melds[1].owner_id = p2_idx;
+        table->melds[1].tiles[0] = (Tile){ .id = 8004, .number = 7, .color = BLUE, .points = 5 };
+        table->melds[1].tiles[1] = (Tile){ .id = 8005, .number = 8, .color = BLUE, .points = 5 };
+        table->melds[1].tiles[2] = (Tile){ .id = 8006, .number = 9, .color = BLUE, .points = 5 };
+        table->melds[1].face_down[0] = false;
+        table->melds[1].face_down[1] = false;
+        table->melds[1].face_down[2] = false;
+        for (int k = 0; k < 3; k++) table->melds[1].tile_owner[k] = p2_idx;
+        table->meld_count++;
+
+        // Meld 2: Group of size 3 containing Joly (RED, BLACK 5s + JOLY). Swapping blocked.
+        table->melds[2].count = 3;
+        table->melds[2].owner_id = p1_idx;
+        table->melds[2].tiles[0] = (Tile){ .id = 8007, .number = 5, .color = RED, .points = 5 };
+        table->melds[2].tiles[1] = (Tile){ .id = 8008, .number = 5, .color = BLACK, .points = 5 };
+        table->melds[2].tiles[2] = (Tile){ .id = 8009, .number = 0, .color = JOKER_COLOR, .points = 50 };
+        table->melds[2].face_down[0] = false;
+        table->melds[2].face_down[1] = false;
+        table->melds[2].face_down[2] = false;
+        for (int k = 0; k < 3; k++) table->melds[2].tile_owner[k] = p1_idx;
+        table->meld_count++;
+
+        // 6. Discard pile: 4 cards
+        discard_count = 0;
+        first_discard_tile_id = 9000;
+        discard_pile[discard_count++] = (Tile){ .id = 9000, .number = 2, .color = RED, .points = 5 };
+        discard_pile[discard_count++] = (Tile){ .id = 9001, .number = 3, .color = YELLOW, .points = 5 };
+        discard_pile[discard_count++] = (Tile){ .id = 9002, .number = 4, .color = BLUE, .points = 5 };
+        discard_pile[discard_count++] = (Tile){ .id = 9003, .number = 5, .color = BLACK, .points = 5 };
+
+        // 7. Transition main state to STATE_DRAW
+        state = STATE_DRAW;
+        select_deck = true;
+        selecting_atu = false;
+        selecting_discard = false;
+        cursor_on_board_during_draw = false;
+        is_holding = false;
+        held_r = -1;
+        held_c = -1;
+
+        mvprintw(18, 5, "[FULL TEST 2] Scenariu 3 piese + Joker + Atu încărcat cu succes!");
+        refresh();
+        napms(1800);
     }
     clear();
     halfdelay(1);
@@ -1786,6 +2063,7 @@ round_start:
 
     // Save one card to be the trump (atuu)
     atuu_tile = deck.tiles[0];
+    atu_taken = false;
 
     init_boards_from_players(players, player_count);
 
@@ -1849,21 +2127,22 @@ round_start:
 
     int cursor_r = 0;
     int cursor_c = 0;
-    GameState state = STATE_PLAY;
+    state = STATE_PLAY;
     int running = 1;
     int quit_mode = 0; // 0 = none, 1 = pending y/n
     int debug_progress = 0;
 
     // Movement state
-    bool is_holding = false;
-    int held_r = -1;
-    int held_c = -1;
+    is_holding = false;
+    held_r = -1;
+    held_c = -1;
 
     // Discard viewport selection
-    bool selecting_discard = false;
-    int discard_cursor = 0;
-    int discard_view_start = 0;
-    bool select_deck = true;
+    selecting_discard = false;
+    discard_cursor = 0;
+    discard_view_start = 0;
+    select_deck = true;
+    selecting_atu = false;
     meld_selection_mode = false;
 
     // Memory for cursor positions in different zones
@@ -1894,6 +2173,9 @@ round_start:
             if (state == STATE_DRAW) {
                 int prev = active->tile_count;
                 draw_from_deck(&deck, active);
+                if (deck.size == 0) {
+                    show_end_game_screen(-1, true, players, &table);
+                }
                 if (active->tile_count > prev) {
                     int first_active = -1;
                     int num_p = 15 - 2 * player_count;
@@ -1935,6 +2217,9 @@ round_start:
                 for (int r = 1; r >= 0; r--) {
                     for (int c = 14; c >= 0; c--) {
                         if (boards[current_player][r][c].id != -1) {
+                            if (active->drew_atu_this_turn && boards[current_player][r][c].id == atuu_tile.id) {
+                                continue;
+                            }
                             disc_r = r;
                             disc_c = c;
                             break;
@@ -1955,17 +2240,22 @@ round_start:
                 }
                 
                 if (active->tile_count == 0) {
-                    show_winner_screen(current_player, players);
+                    show_end_game_screen(current_player, false, players, &table);
                 }
 
                 int save_r = (cursor_r >= 0) ? cursor_r : 0;
                 saved_board_r[current_player] = save_r;
                 saved_board_c[current_player] = cursor_c;
 
+                active->drew_from_discard_this_turn = false;
+                active->drew_atu_this_turn = false;
+
                 current_player = (current_player - 1 + player_count) % player_count;
                 global_turn_number++;
                 players[current_player].melded_this_turn = false;
                 players[current_player].drew_from_discard_this_turn = false;
+                players[current_player].drew_atu_this_turn = false;
+                players[current_player].pending_jokers_to_place_face_down = 0;
                 
                 char log_msg[128];
                 snprintf(log_msg, sizeof(log_msg), "Tura %d. Jucator curent: %d (Timeout)", global_turn_number, current_player + 1);
@@ -2011,7 +2301,7 @@ round_start:
         ((discard_count - 22 < 0) ? 0 : (discard_count - 22)));
         bool disp_select = selecting_discard || (state == STATE_DRAW && !select_deck && !cursor_on_board_during_draw) || (state == STATE_PLAY && cursor_r == -1 && cursor_c == 14 && !meld_selection_mode);
         draw_discard_pile(disp_cursor, disp_view, disp_select);
-        draw_deck_piles(deck.size, (state == STATE_DRAW && !selecting_discard && select_deck && !cursor_on_board_during_draw));
+        draw_deck_piles(deck.size, (state == STATE_DRAW && !selecting_discard && select_deck && !cursor_on_board_during_draw), (state == STATE_DRAW && !selecting_discard && selecting_atu && !cursor_on_board_during_draw));
         draw_board(current_player, cursor_r, cursor_c, is_holding, held_r, held_c, state);
 
         if (cursor_r == 2) {
@@ -2175,7 +2465,11 @@ round_start:
                     }
 
                     if (!can_draw_from_discard(discard_cursor, active, global_turn_number)) {
-                        if (!active->has_melded && discard_cursor < discard_count - 1) {
+                        if (active->tile_count <= 2) {
+                            set_error("Ai doar 1 sau 2 piese! Ești obligat să tragi din grămadă.");
+                        } else if (active->tile_count == 3 && discard_cursor < discard_count - 1) {
+                            set_error("Ai doar 3 piese! Nu poți decât să tragi ultima piesă din decartare.");
+                        } else if (!active->has_melded && discard_cursor < discard_count - 1) {
                             set_error("Trebuie să fii etalat pentru a rupe șirul!");
                         } else {
                             set_error("Mutare nepermisă! Cartea este blocată sau tura este invalidă.");
@@ -2205,6 +2499,10 @@ round_start:
                     cursor_on_board_during_draw = true;
                     cursor_r = 0;
                     cursor_c = 0;
+                } else if (ch == KEY_DOWN) {
+                    select_deck = true;
+                    saved_select_deck[current_player] = true;
+                    selecting_discard = false;
                 }
             } else if (cursor_on_board_during_draw) {
                 if (ch == KEY_LEFT) {
@@ -2367,7 +2665,17 @@ round_start:
                 }
             } else {
                 if (ch == KEY_UP) {
-                    if (discard_count > 0) {
+                    if (selecting_atu) {
+                        selecting_atu = false;
+                        if (discard_count > 0) {
+                            selecting_discard = true;
+                            discard_cursor = discard_count - 1;
+                            discard_view_start = discard_cursor - 21;
+                            if (discard_view_start < 0) discard_view_start = 0;
+                        } else {
+                            select_deck = true;
+                        }
+                    } else if (discard_count > 0) {
                         select_deck = false;
                         saved_select_deck[current_player] = false;
                         selecting_discard = true;
@@ -2380,7 +2688,13 @@ round_start:
                         if (discard_view_start < 0) discard_view_start = 0;
                     }
                 } else if (ch == KEY_DOWN) {
-                    if (select_deck) {
+                    if (selecting_atu) {
+                        selecting_atu = false;
+                        select_deck = false;
+                        cursor_on_board_during_draw = true;
+                        cursor_r = saved_board_r[current_player];
+                        cursor_c = saved_board_c[current_player];
+                    } else if (select_deck) {
                         saved_select_deck[current_player] = select_deck; // true
                         cursor_on_board_during_draw = true;
                         cursor_r = saved_board_r[current_player];
@@ -2390,14 +2704,74 @@ round_start:
                         saved_select_deck[current_player] = true;
                         selecting_discard = false;
                     }
+                } else if (ch == KEY_RIGHT) {
+                    if (select_deck && active->tile_count == 3 && !atu_taken) {
+                        select_deck = false;
+                        selecting_atu = true;
+                    }
+                } else if (ch == KEY_LEFT) {
+                    if (selecting_atu) {
+                        selecting_atu = false;
+                        select_deck = true;
+                    }
                 } else if (ch == 'x' || ch == 'X') {
+                    selecting_atu = false;
                     cursor_on_board_during_draw = true;
                     cursor_r = 0;
                     cursor_c = 0;
                 } else if (ch == 'z' || ch == 'Z') {
-                    if (select_deck) {
+                    if (selecting_atu) {
+                        if (atu_taken) {
+                            set_error("Atuul a fost deja luat!");
+                            continue;
+                        }
+                        atu_taken = true;
+                        active->drew_atu_this_turn = true;
+                        active->hand[active->tile_count] = atuu_tile;
+                        active->tile_count++;
+                        
+                        int num_p = 15 - 2 * player_count;
+                        if (num_p < 1) num_p = 1;
+                        int last_active_idx = -1;
+                        for (int i = num_p - 1; i >= 0; i--) {
+                            if (deck_pile_sizes[i] > 0) {
+                                last_active_idx = i;
+                                break;
+                            }
+                        }
+                        if (last_active_idx != -1) {
+                            deck_pile_sizes[last_active_idx]--;
+                            if (deck_pile_sizes[last_active_idx] == 0) {
+                                for (int j = last_active_idx; j < num_p - 1; j++) {
+                                    deck_pile_sizes[j] = deck_pile_sizes[j + 1];
+                                }
+                                deck_pile_sizes[num_p - 1] = 0;
+                            }
+                        }
+                        deck.size--;
+                        
+                        add_tile_to_board(current_player, atuu_tile);
+                        sync_board_to_player(current_player, active);
+                        
+                        for (int r = 0; r < 2; r++) {
+                            for (int c = 0; c < 15; c++) {
+                                if (boards[current_player][r][c].id == atuu_tile.id) {
+                                    cursor_r = r;
+                                    cursor_c = c;
+                                    break;
+                                }
+                            }
+                        }
+                        selecting_atu = false;
+                        state = STATE_PLAY;
+                        action_start_time = time(NULL);
+                        action_time_limit = 25;
+                    } else if (select_deck) {
                         int prev = active->tile_count;
                         draw_from_deck(&deck, active);
+                        if (deck.size == 0) {
+                            show_end_game_screen(-1, true, players, &table);
+                        }
                         if (active->tile_count > prev) {
                             int first_active = -1;
                             int num_p = 15 - 2 * player_count;
@@ -2621,6 +2995,10 @@ round_start:
                                 set_error("Trebuie să te etalezi (min. 45 pct) înainte de a face lipituri!");
                             } else {
                                 Tile tile = boards[current_player][sel_r][sel_c];
+                                if (active->drew_from_discard_this_turn && tile.id == active->primary_discard_drawn_tile.id) {
+                                    set_error("Nu poți folosi piesa extrasă din decartare pentru Joker în această tură!");
+                                    continue;
+                                }
                                 int joker_idx = -1;
                                 if (can_replace_joker(&table.melds[cursor_c], tile, &joker_idx)) {
                                     Tile joker_tile = table.melds[cursor_c].tiles[joker_idx];
@@ -2628,11 +3006,14 @@ round_start:
                                     joker_tile.color = JOKER_COLOR;
                                     joker_tile.points = 50;
                                     table.melds[cursor_c].tiles[joker_idx] = tile;
+                                    table.melds[cursor_c].face_down[joker_idx] = true;
+                                    table.melds[cursor_c].tile_owner[joker_idx] = current_player;
                                     if (is_valid_run(table.melds[cursor_c].tiles, table.melds[cursor_c].count)) {
-                                        sort_run(table.melds[cursor_c].tiles, table.melds[cursor_c].count);
+                                        sort_run_with_flags(table.melds[cursor_c].tiles, table.melds[cursor_c].face_down, table.melds[cursor_c].tile_owner, table.melds[cursor_c].count);
                                     }
                                     boards[current_player][sel_r][sel_c] = joker_tile;
                                     selected_tiles[current_player][sel_r][sel_c] = 0;
+                                    active->pending_jokers_to_place_face_down++;
                                     sync_board_to_player(current_player, active);
                                     cursor_r = sel_r;
                                     cursor_c = sel_c;
@@ -2643,7 +3024,18 @@ round_start:
                                     napms(1200);
                                     mvprintw(38, 5, "                                                                        ");
                                 } else if (can_attach_tile_to_side(&table.melds[cursor_c], tile, attach_side)) {
-                                    if (attach_tile_to_meld_side(&table, cursor_c, tile, attach_side)) {
+                                    if (active->drew_from_discard_this_turn && tile.id == active->primary_discard_drawn_tile.id) {
+                                        set_error("Nu poți lipi piesa extrasă din decartare în această tură!");
+                                        continue;
+                                    }
+                                    if (tile.number == 0 && table.melds[cursor_c].owner_id != current_player) {
+                                        set_error("Joly nu poate fi lipit la formațiile altor jucători!");
+                                        continue;
+                                    }
+                                    if (attach_tile_to_meld_side(&table, cursor_c, tile, attach_side, current_player)) {
+                                        if (tile.number == 0 && active->pending_jokers_to_place_face_down > 0) {
+                                            active->pending_jokers_to_place_face_down--;
+                                        }
                                         boards[current_player][sel_r][sel_c].id = -1;
                                         boards[current_player][sel_r][sel_c].number = -1;
                                         selected_tiles[current_player][sel_r][sel_c] = 0;
@@ -2701,7 +3093,7 @@ round_start:
                                     }
                                     
                                     if (active->tile_count == 0) {
-                                        show_winner_screen(current_player, players);
+                                        show_end_game_screen(current_player, false, players, &table);
                                     }
                                 } else if (status == -1) {
                                     set_error("Selecție invalidă! O formație are <3 piese sau piese invalide.");
@@ -2940,6 +3332,15 @@ round_start:
                                 set_error("Eroare: Nu ții nicio piesă!");
                             } else {
                                  // Discard the held card!
+                                 if (active->drew_atu_this_turn && boards[current_player][held_r][held_c].id == atuu_tile.id) {
+                                     set_error("Eroare: Nu poți închide/decarta cu Atuul luat!");
+                                     continue;
+                                 }
+                                 if (active->drew_atu_this_turn && player_has_tile_id(current_player, atuu_tile.id)) {
+                                     set_error("Eroare: Trebuie să joci Atuul luat într-o formație pe masă!");
+                                     continue;
+                                 }
+
                                  if (discard_count == 0) {
                                      first_discard_tile_id = boards[current_player][held_r][held_c].id;
                                  }
@@ -2949,17 +3350,22 @@ round_start:
                                 sync_board_to_player(current_player, active);
 
                                  if (active->tile_count == 0) {
-                                     show_winner_screen(current_player, players);
+                                     show_end_game_screen(current_player, false, players, &table);
                                  } else {
                                      saved_board_r[current_player] = held_r;
                                      saved_board_c[current_player] = held_c;
                                      
+                                     active->drew_from_discard_this_turn = false;
+                                     active->drew_atu_this_turn = false;
+
                                      current_player = (current_player - 1 + player_count) % player_count;
                                      action_start_time = time(NULL);
                                      action_time_limit = (global_turn_number == 1) ? 60 : 25;
                                      global_turn_number++;
                                      players[current_player].melded_this_turn = false;
                                      players[current_player].drew_from_discard_this_turn = false;
+                                     players[current_player].drew_atu_this_turn = false;
+                                     players[current_player].pending_jokers_to_place_face_down = 0;
                                      char log_msg[128];
                                      snprintf(log_msg, sizeof(log_msg), "Tura %d. Jucator curent: %d", global_turn_number, current_player + 1);
                                      log_event(log_msg);
@@ -2985,6 +3391,10 @@ round_start:
                                 set_error("Trebuie să te etalezi (min. 45 pct) înainte de a face lipituri!");
                             } else {
                                 Tile tile = boards[current_player][held_r][held_c];
+                                if (active->drew_from_discard_this_turn && tile.id == active->primary_discard_drawn_tile.id) {
+                                    set_error("Nu poți folosi piesa extrasă din decartare pentru Joker în această tură!");
+                                    continue;
+                                }
                                 int joker_idx = -1;
                                 if (can_replace_joker(&table.melds[cursor_c], tile, &joker_idx)) {
                                     Tile joker_tile = table.melds[cursor_c].tiles[joker_idx];
@@ -2992,11 +3402,14 @@ round_start:
                                     joker_tile.color = JOKER_COLOR;
                                     joker_tile.points = 50;
                                     table.melds[cursor_c].tiles[joker_idx] = tile;
+                                    table.melds[cursor_c].face_down[joker_idx] = true;
+                                    table.melds[cursor_c].tile_owner[joker_idx] = current_player;
                                     if (is_valid_run(table.melds[cursor_c].tiles, table.melds[cursor_c].count)) {
-                                        sort_run(table.melds[cursor_c].tiles, table.melds[cursor_c].count);
+                                        sort_run_with_flags(table.melds[cursor_c].tiles, table.melds[cursor_c].face_down, table.melds[cursor_c].tile_owner, table.melds[cursor_c].count);
                                     }
                                     boards[current_player][held_r][held_c] = joker_tile;
                                     is_holding = false;
+                                    active->pending_jokers_to_place_face_down++;
                                     sync_board_to_player(current_player, active);
                                     cursor_r = held_r;
                                     cursor_c = held_c;
@@ -3009,8 +3422,19 @@ round_start:
                                     napms(1200);
                                     mvprintw(38, 5, "                                                                        ");
                                 } else if (can_attach_tile_to_side(&table.melds[cursor_c], tile, attach_side)) {
-                                    if (attach_tile_to_meld_side(&table, cursor_c, tile, attach_side)) {
+                                    if (active->drew_from_discard_this_turn && tile.id == active->primary_discard_drawn_tile.id) {
+                                        set_error("Nu poți lipi piesa extrasă din decartare în această tură!");
+                                        continue;
+                                    }
+                                    if (tile.number == 0 && table.melds[cursor_c].owner_id != current_player) {
+                                        set_error("Joly nu poate fi lipit la formațiile altor jucători!");
+                                        continue;
+                                    }
+                                    if (attach_tile_to_meld_side(&table, cursor_c, tile, attach_side, current_player)) {
                                         active->score += tile.points;
+                                        if (tile.number == 0 && active->pending_jokers_to_place_face_down > 0) {
+                                            active->pending_jokers_to_place_face_down--;
+                                        }
                                         boards[current_player][held_r][held_c].id = -1;
                                         boards[current_player][held_r][held_c].number = -1;
                                         sync_board_to_player(current_player, active);
@@ -3145,13 +3569,20 @@ round_start:
                 if (boards[current_player][cursor_r][cursor_c].id != -1) {
                     if (!validate_discard_rules(active)) {
                         set_error("Eroare: Trebuie să joci piesa extrasă din teanc într-o formație nouă!");
+                    } else if (active->pending_jokers_to_place_face_down > 0) {
+                        set_error("Eroare: Trebuie să joci Jokerul recuperat într-o formație în această tură!");
+                    } else if (active->drew_atu_this_turn && boards[current_player][cursor_r][cursor_c].id == atuu_tile.id) {
+                        set_error("Eroare: Nu poți închide/decarta cu Atuul luat!");
+                    } else if (active->drew_atu_this_turn && player_has_tile_id(current_player, atuu_tile.id)) {
+                        set_error("Eroare: Trebuie să joci Atuul luat într-o formație pe masă!");
                     } else {
                         active->drew_from_discard_this_turn = false; // resetare flag
+                        active->drew_atu_this_turn = false;
                         discard_tile_from_board(current_player, active, cursor_r, cursor_c);
 
                         // Check win condition
                         if (active->tile_count == 0) {
-                            show_winner_screen(current_player, players);
+                            show_end_game_screen(current_player, false, players, &table);
                         } else {
                             int save_r = (cursor_r >= 0) ? cursor_r : 0;
                             saved_board_r[current_player] = save_r;
@@ -3163,6 +3594,8 @@ round_start:
                             global_turn_number++;
                             players[current_player].melded_this_turn = false;
                             players[current_player].drew_from_discard_this_turn = false;
+                            players[current_player].drew_atu_this_turn = false;
+                            players[current_player].pending_jokers_to_place_face_down = 0;
                             char log_msg[128];
                             snprintf(log_msg, sizeof(log_msg), "Tura %d. Jucator curent: %d", global_turn_number, current_player + 1);
                             log_event(log_msg);

@@ -65,6 +65,8 @@ void deal_hands(Deck *deck, Player players[], int num_players, int starting_play
         players[i].primary_discard_drawn_tile.id = -1;
         players[i].score = 0;
         players[i].melded_this_turn = false; // Initializare G1
+        players[i].pending_jokers_to_place_face_down = 0;
+        players[i].drew_atu_this_turn = false;
     }
 
     for (int i = 0; i < 14; i++) {
@@ -352,16 +354,89 @@ void init_table(Table *table) {
     table->meld_count = 0;
 }
 
-bool place_meld(Table *table, Tile tiles[], int count, int owner_id) {
-    if (!is_valid_meld(tiles, count)) return false;
+void sort_run_with_flags(Tile tiles[], bool face_down[], int tile_owner[], int count) {
+    bool has_thirteen = false;
+    bool has_one = false;
+    
+    for (int i = 0; i < count; i++) {
+        if (tiles[i].number == 13) has_thirteen = true;
+        if (tiles[i].number == 1) has_one = true;
+    }
+    
+    bool ace_high = (has_one && has_thirteen);
+    int sort_vals[14];
+    
+    for (int i = 0; i < count; i++) {
+        if (tiles[i].number == 0) sort_vals[i] = -1;
+        else if (tiles[i].number == 1 && ace_high) sort_vals[i] = 14;
+        else sort_vals[i] = tiles[i].number;
+    }
+    
+    // Sortare piese non-joker
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = 0; j < count - i - 1; j++) {
+            if (sort_vals[j] == -1 || sort_vals[j+1] == -1) continue;
+            if (sort_vals[j] > sort_vals[j+1]) {
+                Tile temp = tiles[j];
+                tiles[j] = tiles[j+1];
+                tiles[j+1] = temp;
+                
+                bool temp_fd = face_down[j];
+                face_down[j] = face_down[j+1];
+                face_down[j+1] = temp_fd;
+                
+                int temp_own = tile_owner[j];
+                tile_owner[j] = tile_owner[j+1];
+                tile_owner[j+1] = temp_own;
+                
+                int tmp_v = sort_vals[j];
+                sort_vals[j] = sort_vals[j+1];
+                sort_vals[j+1] = tmp_v;
+            }
+        }
+    }
+    
+    // Plasare Joker in gol
+    for (int i = 0; i < count; i++) {
+        if (tiles[i].number == 0) {
+            Tile joker = tiles[i];
+            bool joker_fd = face_down[i];
+            int joker_own = tile_owner[i];
+            for (int k = i; k < count - 1; k++) {
+                tiles[k] = tiles[k+1];
+                face_down[k] = face_down[k+1];
+                tile_owner[k] = tile_owner[k+1];
+                sort_vals[k] = sort_vals[k+1];
+            }
+            int insert_pos = count - 1;
+            for (int k = 0; k < count - 2; k++) {
+                if (sort_vals[k] != -1 && sort_vals[k+1] != -1) {
+                    if (sort_vals[k+1] - sort_vals[k] > 1) {
+                        insert_pos = k + 1;
+                        break;
+                    }
+                }
+            }
+            for (int k = count - 1; k > insert_pos; k--) {
+                tiles[k] = tiles[k-1];
+                face_down[k] = face_down[k-1];
+                tile_owner[k] = tile_owner[k-1];
+                sort_vals[k] = sort_vals[k-1];
+            }
+            tiles[insert_pos] = joker;
+            face_down[insert_pos] = joker_fd;
+            tile_owner[insert_pos] = joker_own;
+            sort_vals[insert_pos] = -1;
+            break;
+        }
+    }
+}
+
+bool place_meld(Table *table, Meld *m) {
+    if (!is_valid_meld(m->tiles, m->count)) return false;
     if (table->meld_count >= MAX_MELDS) return false;
 
-    Meld *m = &table->melds[table->meld_count];
-    for (int i = 0; i < count; i++) {
-        m->tiles[i] = tiles[i];
-    }
-    m->count = count;
-    m->owner_id = owner_id;
+    table->melds[table->meld_count] = *m;
     table->meld_count++;
     return true;
 }
@@ -376,7 +451,10 @@ void draw_from_discard(Tile discard_pile[], int *discard_count, Player *player) 
 
 // NOU G2: Validare extragere din decartare
 bool can_draw_from_discard(int discard_index, const Player *player, int turn_number) {
-    if (turn_number == 1) return false; // Nicio tragere in tura 1
+    if (turn_number <= player_count) return false; // Nicio tragere in prima tura
+    if (discard_index == 0) return false; // Prima piesa nu se poate lua/rupe niciodata
+    if (player->tile_count <= 2) return false; // 1 sau 2 piese -> obligat din gramada
+    if (player->tile_count == 3 && discard_index != discard_count - 1) return false; // 3 piese -> doar ultima carte
     if (discard_count > 0 && discard_index < discard_count) {
         if (discard_pile[discard_index].id == first_discard_tile_id) return false; // Prima carte blocata permanent
     }
@@ -533,7 +611,12 @@ bool play_initial_melds(Player *player, Table *table, Meld staged[], int meld_co
     if (check_initial_melds(staged, meld_count)) {
         int earned_points = 0;
         for (int i = 0; i < meld_count; i++) {
-            place_meld(table, staged[i].tiles, staged[i].count, player_idx);
+            staged[i].owner_id = player_idx;
+            for (int k = 0; k < staged[i].count; k++) {
+                staged[i].face_down[k] = false;
+                staged[i].tile_owner[k] = player_idx;
+            }
+            place_meld(table, &staged[i]);
             earned_points += calculate_meld_points(staged[i].tiles, staged[i].count);
         }
         remove_tiles_from_hand(player, hand_indices, num_indices);
@@ -607,7 +690,12 @@ bool attempt_auto_meld_from_discard(Player *player, Table *table, int player_idx
         
         int earned = 0;
         for (int i = 0; i < num_splits; i++) {
-            place_meld(table, split_melds[i].tiles, split_melds[i].count, player_idx);
+            split_melds[i].owner_id = player_idx;
+            for (int k = 0; k < split_melds[i].count; k++) {
+                split_melds[i].face_down[k] = false;
+                split_melds[i].tile_owner[k] = player_idx;
+            }
+            place_meld(table, &split_melds[i]);
             earned += calculate_meld_points(split_melds[i].tiles, split_melds[i].count);
         }
         
@@ -702,6 +790,7 @@ void partition_unordered_recursive(Tile pool[], int pool_size, Meld current_part
             current_partition[partition_size].count = len;
             for (int i = 0; i < len; i++) {
                 current_partition[partition_size].tiles[i] = subset[i];
+                current_partition[partition_size].face_down[i] = false;
             }
             
             Tile new_pool[15];
