@@ -364,10 +364,15 @@ bool show_create_room_lobby(RoomState *room, AccountFile *af, const char *host_u
         room->players[i].connected = false;
     }
     
-    // Obtine IP local pentru codul camerei
-    char local_ip[64];
-    net_get_local_ip(local_ip, sizeof(local_ip));
-    snprintf(room->room_code, NET_ROOM_CODE_LEN, "%s:%d", local_ip, NET_PORT);
+    // Generam cod alfanumeric de 6 caractere (litere mari si cifre)
+    const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    for (int i = 0; i < 6; i++) {
+        room->room_code[i] = charset[rand() % 36];
+    }
+    room->room_code[6] = '\0';
+
+    // Pornim serverul UDP de discovery pentru acest cod
+    start_udp_discovery(room->room_code);
     
     halfdelay(2); // Non-blocking cu 200ms timeout
     
@@ -453,9 +458,11 @@ bool show_create_room_lobby(RoomState *room, AccountFile *af, const char *host_u
         
         int ch = getch();
         if (ch == 27) { // ESC
+            stop_udp_discovery();
             net_close_server(room);
             return false;
         } else if ((ch == '\n' || ch == KEY_ENTER) && room->player_count >= 2) {
+            stop_udp_discovery();
             // Porneste numaratoarea inversa
             show_countdown(room);
             return true;
@@ -484,8 +491,8 @@ bool show_join_room(RoomState *room, AccountFile *af, const char *username) {
         attroff(COLOR_PAIR(6) | A_BOLD);
         
         attron(COLOR_PAIR(6));
-        mvprintw(13, 15, "Introdu codul camerei (IP:Port):");
-        mvprintw(14, 15, "Exemplu: 192.168.1.5:%d", NET_PORT);
+        mvprintw(13, 15, "Introdu codul camerei (6 caractere):");
+        mvprintw(14, 15, "Exemplu: RUMY45");
         attroff(COLOR_PAIR(6));
         
         attron(COLOR_PAIR(7) | A_BOLD);
@@ -510,37 +517,39 @@ bool show_join_room(RoomState *room, AccountFile *af, const char *username) {
             halfdelay(1);
             return false;
         } else if (ch == '\n' || ch == KEY_ENTER) {
-            if (ip_len == 0) {
-                strcpy(error_msg, "Codul nu poate fi gol!");
+            if (ip_len != 6) {
+                strcpy(error_msg, "Codul camerei trebuie să aibă exact 6 caractere!");
                 continue;
             }
             
-            // Parse IP:port
-            char ip[64] = "";
-            int port = NET_PORT;
-            char *colon = strchr(ip_input, ':');
-            if (colon) {
-                int ip_part_len = colon - ip_input;
-                strncpy(ip, ip_input, ip_part_len);
-                ip[ip_part_len] = '\0';
-                port = atoi(colon + 1);
-                if (port <= 0 || port > 65535) port = NET_PORT;
-            } else {
-                strncpy(ip, ip_input, sizeof(ip) - 1);
-            }
-            
-            // Incearca conectarea
+            // Incearca rezolvarea codului camerei prin UDP
             curs_set(0);
             erase();
             attron(COLOR_PAIR(8) | A_BOLD);
-            mvprintw(12, 15, "Se conecteaza la %s:%d...", ip, port);
+            mvprintw(12, 15, "Se caută camera %s pe rețeaua locală...", ip_input);
+            attroff(COLOR_PAIR(8) | A_BOLD);
+            refresh();
+
+            char ip[64] = "";
+            if (!resolve_room_code(ip_input, ip)) {
+                curs_set(1);
+                strcpy(error_msg, "Camera nu a fost găsită pe rețeaua locală!");
+                continue;
+            }
+            
+            int port = NET_PORT;
+            
+            // Incearca conectarea TCP la IP-ul rezolvat
+            erase();
+            attron(COLOR_PAIR(8) | A_BOLD);
+            mvprintw(12, 15, "Se conecteaza la camera %s...", ip_input);
             attroff(COLOR_PAIR(8) | A_BOLD);
             refresh();
             
             int sock = net_connect_to_server(ip, port);
             if (sock < 0) {
                 curs_set(1);
-                strcpy(error_msg, "Nu s-a putut conecta! Verificati codul.");
+                strcpy(error_msg, "Nu s-a putut stabili conexiunea cu camera!");
                 continue;
             }
             
@@ -682,8 +691,8 @@ bool show_join_room(RoomState *room, AccountFile *af, const char *username) {
                 ip_input[ip_len] = '\0';
                 error_msg[0] = '\0';
             }
-        } else if (ip_len < 63 && (isdigit(ch) || ch == '.' || ch == ':')) {
-            ip_input[ip_len] = (char)ch;
+        } else if (ip_len < 6 && isalnum(ch)) {
+            ip_input[ip_len] = toupper((unsigned char)ch);
             ip_len++;
             ip_input[ip_len] = '\0';
             error_msg[0] = '\0';

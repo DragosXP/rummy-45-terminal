@@ -45,7 +45,8 @@ typedef enum {
     ACTION_REPLACE_JOKER = 7,   // Inlocuieste un joker
     ACTION_MOVE_TILE = 8,       // Muta o piesa pe tabla personala
     ACTION_SWAP_DOUBLE = 9,     // Schimba dubla
-    ACTION_PASS = 10            // Timeout / pass
+    ACTION_PASS = 10,            // Timeout / pass
+    ACTION_UNDO_DRAW_DISCARD = 11
 } NetActionType;
 
 // Header-ul unui mesaj de retea
@@ -78,10 +79,11 @@ typedef struct {
 // Actiunea trimisa de jucator
 typedef struct {
     NetActionType action_type;
-    int param1;     // Parametru generic 1 (ex: cursor_r, meld_index)
-    int param2;     // Parametru generic 2 (ex: cursor_c, hand_index)
-    int param3;     // Parametru generic 3 (ex: side, tile_id)
-    // Date suplimentare pentru meld-uri (piesele selectate)
+    int param1;     // Parametru generic 1
+    int param2;     // Parametru generic 2
+    int param3;     // Parametru generic 3
+    int param4;     // Parametru generic 4 (ex: attach_side)
+    // Date suplimentare pentru meld-uri
     int selected_count;
     int selected_r[30];
     int selected_c[30];
@@ -130,5 +132,10 @@ void net_serialize_hand(Player *player, int player_idx, Tile board[2][15],
                         void *buffer, uint32_t *len);
 void net_deserialize_hand(const void *buffer, uint32_t len,
                           Player *player, int *player_idx, Tile board[2][15]);
+
+// UDP discovery functions
+void start_udp_discovery(const char *code);
+void stop_udp_discovery(void);
+bool resolve_room_code(const char *code, char *resolved_ip);
 
 #endif

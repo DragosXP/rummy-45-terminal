@@ -326,8 +326,8 @@ void net_serialize_game_state(Player players[], int p_count, Table *table,
     memcpy(buf + offset, &atuu, sizeof(Tile)); offset += sizeof(Tile);
     memcpy(buf + offset, &atu_owner, sizeof(int)); offset += sizeof(int);
     
-    // Deck size (nu trimitem piesele, doar size-ul)
-    memcpy(buf + offset, &deck->size, sizeof(int)); offset += sizeof(int);
+    // Deck (copy entire struct)
+    memcpy(buf + offset, deck, sizeof(Deck)); offset += sizeof(Deck);
     
     // Discard pile
     memcpy(buf + offset, &dc, sizeof(int)); offset += sizeof(int);
@@ -370,7 +370,7 @@ void net_deserialize_game_state(const void *buffer, uint32_t len,
     memcpy(atuu, buf + offset, sizeof(Tile)); offset += sizeof(Tile);
     memcpy(atu_owner, buf + offset, sizeof(int)); offset += sizeof(int);
     
-    memcpy(&deck->size, buf + offset, sizeof(int)); offset += sizeof(int);
+    memcpy(deck, buf + offset, sizeof(Deck)); offset += sizeof(Deck);
     
     memcpy(dc, buf + offset, sizeof(int)); offset += sizeof(int);
     if (*dc > 0) {
@@ -436,3 +436,121 @@ void net_deserialize_hand(const void *buffer, uint32_t len,
     
     memcpy(player->hand, buf + offset, sizeof(Tile) * player->tile_count);
 }
+
+// ========== UDP Discovery System for 6-Character Room Codes ==========
+#include <pthread.h>
+
+static pthread_t discovery_thread;
+static bool discovery_running = false;
+static char current_room_code[7] = "";
+
+void *udp_discovery_thread_func(void *arg) {
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return NULL;
+
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(7778); // UDP port for discovery
+
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(fd);
+        return NULL;
+    }
+
+    char buf[128];
+    while (discovery_running) {
+        struct sockaddr_in client_addr;
+        socklen_t addr_len = sizeof(client_addr);
+        ssize_t len = recvfrom(fd, buf, sizeof(buf) - 1, 0, (struct sockaddr *)&client_addr, &addr_len);
+        if (len < 0) continue;
+        buf[len] = '\0';
+
+        // Trim whitespace
+        while (len > 0 && (buf[len-1] == '\r' || buf[len-1] == '\n' || buf[len-1] == ' ')) {
+            buf[--len] = '\0';
+        }
+
+        // Compare room code (case-insensitive)
+        if (strcasecmp(buf, current_room_code) == 0) {
+            // Send response back
+            sendto(fd, "OK", 2, 0, (struct sockaddr *)&client_addr, addr_len);
+        }
+    }
+
+    close(fd);
+    return NULL;
+}
+
+void start_udp_discovery(const char *code) {
+    strncpy(current_room_code, code, 6);
+    current_room_code[6] = '\0';
+    discovery_running = true;
+    pthread_create(&discovery_thread, NULL, udp_discovery_thread_func, NULL);
+}
+
+void stop_udp_discovery(void) {
+    if (discovery_running) {
+        discovery_running = false;
+        // Send a dummy UDP packet to ourselves to unblock recvfrom
+        int fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (fd >= 0) {
+            struct sockaddr_in addr;
+            memset(&addr, 0, sizeof(addr));
+            addr.sin_family = AF_INET;
+            addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+            addr.sin_port = htons(7778);
+            sendto(fd, "EXIT", 4, 0, (struct sockaddr *)&addr, sizeof(addr));
+            close(fd);
+        }
+        pthread_join(discovery_thread, NULL);
+    }
+}
+
+bool resolve_room_code(const char *code, char *resolved_ip) {
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return false;
+
+    // Enable broadcast
+    int broadcast_opt = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &broadcast_opt, sizeof(broadcast_opt)) < 0) {
+        close(fd);
+        return false;
+    }
+
+    // Set non-blocking/timeout for recvfrom (500ms timeout)
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 500000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in broadcast_addr;
+    memset(&broadcast_addr, 0, sizeof(broadcast_addr));
+    broadcast_addr.sin_family = AF_INET;
+    broadcast_addr.sin_addr.s_addr = INADDR_BROADCAST; // 255.255.255.255
+    broadcast_addr.sin_port = htons(7778);
+
+    // Try sending broadcast multiple times
+    for (int retry = 0; retry < 5; retry++) {
+        sendto(fd, code, strlen(code), 0, (struct sockaddr *)&broadcast_addr, sizeof(broadcast_addr));
+
+        struct sockaddr_in from_addr;
+        socklen_t addr_len = sizeof(from_addr);
+        char recv_buf[16];
+        ssize_t len = recvfrom(fd, recv_buf, sizeof(recv_buf) - 1, 0, (struct sockaddr *)&from_addr, &addr_len);
+        if (len >= 2 && strncmp(recv_buf, "OK", 2) == 0) {
+            // Found it! Convert IP address to string
+            inet_ntop(AF_INET, &from_addr.sin_addr, resolved_ip, 16);
+            close(fd);
+            return true;
+        }
+    }
+
+    close(fd);
+    return false;
+}
+
