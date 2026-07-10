@@ -70,6 +70,7 @@ extern int discard_count;
 
 // Globals adaugate
 extern int global_turn_number;
+extern int player_count;
 extern int first_discard_tile_id;
 
 // Function declarations
@@ -83,6 +84,7 @@ void discard_tile(Player *player, int hand_index, Tile discard_pile[], int *disc
 bool is_valid_group(Tile tiles[], int count);
 bool is_valid_run(Tile tiles[], int count);
 bool is_valid_meld(Tile tiles[], int count);
+int calculate_meld_points(Tile tiles[], int count);
 
 // Functie folosita de main.c pentru a sorta vizual o suita pe masa
 void sort_run(Tile tiles[], int count);
@@ -126,5 +128,9 @@ bool validate_discard_rules(const Player *player);
 bool can_draw_from_discard(int discard_index, const Player *player, int turn_number);
 bool attempt_auto_meld_from_discard(Player *player, Table *table, int player_idx);
 bool can_place_meld_without_emptying(const Player *player, int tiles_to_remove);
+int count_doubles(Tile hand[], int count);
+
+extern int initial_atu_owner;
+extern bool swap_pending[MAX_PLAYERS];
 
 #endif

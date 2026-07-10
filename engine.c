@@ -148,7 +148,7 @@ bool check_sequence_gaps(int nums[], int num_count, int jokers_available) {
     return jokers_needed <= jokers_available;
 }
 
-bool is_valid_run(Tile tiles[], int count) {
+bool can_form_valid_run(Tile tiles[], int count) {
     if (count < 3 || count > 14) return false;
 
     int joker_count = 0;
@@ -202,6 +202,83 @@ bool is_valid_run(Tile tiles[], int count) {
         }
     }
     return valid;
+}
+
+bool is_valid_run(Tile tiles[], int count) {
+    if (count < 3 || count > 14) return false;
+
+    int joker_count = 0;
+    int real_tiles_count = 0;
+    Color target_color = JOKER_COLOR;
+
+    for (int i = 0; i < count; i++) {
+        if (tiles[i].number == 0) {
+            joker_count++;
+            if (joker_count > 1) return false;
+            continue;
+        }
+        if (target_color == JOKER_COLOR) {
+            target_color = tiles[i].color;
+        } else if (tiles[i].color != target_color) {
+            return false;
+        }
+        real_tiles_count++;
+    }
+
+    if (real_tiles_count < 2) return false;
+
+    // Seed candidate V_0 values based on the first real tile
+    int first_real_idx = -1;
+    for (int i = 0; i < count; i++) {
+        if (tiles[i].number != 0) {
+            first_real_idx = i;
+            break;
+        }
+    }
+    if (first_real_idx == -1) return false;
+
+    int candidates[2];
+    int candidate_count = 0;
+
+    if (tiles[first_real_idx].number == 1) {
+        candidates[candidate_count++] = 1 - first_real_idx;
+        candidates[candidate_count++] = 14 - first_real_idx;
+    } else {
+        candidates[candidate_count++] = tiles[first_real_idx].number - first_real_idx;
+    }
+
+    for (int c = 0; c < candidate_count; c++) {
+        int v0 = candidates[c];
+        bool possible = true;
+
+        for (int i = 0; i < count; i++) {
+            int val = v0 + i;
+            if (val < 1 || val > 14) {
+                possible = false;
+                break;
+            }
+
+            if (tiles[i].number != 0) {
+                if (tiles[i].number == 1) {
+                    if (val != 1 && val != 14) {
+                        possible = false;
+                        break;
+                    }
+                } else {
+                    if (val != tiles[i].number) {
+                        possible = false;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (possible) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 bool is_valid_meld(Tile tiles[], int count) {
@@ -329,7 +406,7 @@ int calculate_meld_points(Tile tiles[], int count) {
                 break;
             }
         }
-        if (num == 1) return count * 10; 
+        if (num == 1) return count * 25; 
         if (num >= 10) return count * 10;
         return count * 5;
     }
@@ -389,15 +466,28 @@ bool check_initial_meld(Tile tiles[], int count) {
 bool check_initial_melds(Meld staged[], int meld_count) {
     int total = 0;
     bool has_run = false;
+    bool has_terta_1 = false;
 
     for (int m = 0; m < meld_count; m++) {
         if (!is_valid_meld(staged[m].tiles, staged[m].count)) return false;
         if (is_valid_run(staged[m].tiles, staged[m].count)) {
             has_run = true;
         }
+        if (is_valid_group(staged[m].tiles, staged[m].count)) {
+            int val = -1;
+            for (int i = 0; i < staged[m].count; i++) {
+                if (staged[m].tiles[i].number != 0) {
+                    val = staged[m].tiles[i].number;
+                    break;
+                }
+            }
+            if (val == 1) {
+                has_terta_1 = true;
+            }
+        }
         total += calculate_meld_points(staged[m].tiles, staged[m].count);
     }
-    return (total >= 45 && has_run);
+    return (total >= 45 && (has_run || has_terta_1));
 }
 
 bool has_player_won(Player *player) {
@@ -436,7 +526,7 @@ bool can_place_meld_without_emptying(const Player *player, int tiles_to_remove) 
 }
 
 bool play_initial_melds(Player *player, Table *table, Meld staged[], int meld_count, int hand_indices[], int num_indices, int player_idx) {
-    if (global_turn_number == 1) return false; // Nicio coborare in tura 1 (G2)
+    if (global_turn_number <= player_count) return false; // Nicio coborare in prima tura (G2)
     if (player->has_melded == true) return false; 
     if (!can_place_meld_without_emptying(player, num_indices)) return false; // Pastrare minim 1 carte (G6)
 
@@ -497,6 +587,7 @@ bool play_lipitura(Player *player, Table *table, int meld_index, int hand_index)
 // ====================================================================
 bool attempt_auto_meld_from_discard(Player *player, Table *table, int player_idx) {
     if (player->has_melded) return false;
+    if (global_turn_number <= player_count) return false; // Nu se etaleaza in prima tura (G2)
     if (discard_count <= 0) return false;
     
     Tile candidate = discard_pile[discard_count - 1];
@@ -602,7 +693,7 @@ void partition_unordered_recursive(Tile pool[], int pool_size, Meld current_part
         bool valid = false;
         if (is_valid_group(subset, len)) {
             valid = true;
-        } else if (is_valid_run(subset, len)) {
+        } else if (can_form_valid_run(subset, len)) {
             sort_run(subset, len); 
             valid = true;
         }
@@ -643,4 +734,22 @@ int split_unordered_melds(Tile input[], int count, Meld output_melds[]) {
     }
     
     return 0;
+}
+
+int count_doubles(Tile hand[], int count) {
+    int pairs = 0;
+    bool paired[20] = {false};
+    for (int i = 0; i < count; i++) {
+        if (paired[i] || hand[i].id == -1 || hand[i].number == 0) continue;
+        for (int j = i + 1; j < count; j++) {
+            if (paired[j] || hand[j].id == -1 || hand[j].number == 0) continue;
+            if (hand[i].number == hand[j].number && hand[i].color == hand[j].color) {
+                pairs++;
+                paired[i] = true;
+                paired[j] = true;
+                break;
+            }
+        }
+    }
+    return pairs;
 }
