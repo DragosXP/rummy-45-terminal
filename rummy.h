@@ -46,6 +46,8 @@ typedef struct {
     Tile primary_discard_drawn_tile;
     int score;
     bool melded_this_turn; // Devine true cand jucatorul coboara formatii in tura curenta
+    int pending_jokers_to_place_face_down; // Numarul de jokeri care trebuie plasati cu fata in jos in aceasta tura
+    bool drew_atu_this_turn;
 } Player;
 
 #define MAX_PLAYERS 4
@@ -53,6 +55,8 @@ typedef struct {
 // O singura formatie de pe masa (suita sau grup)
 typedef struct {
     Tile tiles[13];   // maxim 13 piese intr-o suita
+    bool face_down[13]; // nou: indica daca piesa de pe pozitia respectiva este cu fata in jos
+    int  tile_owner[13]; // nou: indica proprietarul fiecarei piese din formatie (pentru scor)
     int  count;       // cate piese se afla in aceasta formatie
     int  owner_id;    // id-ul jucatorului care a plasat formatia
 } Meld;
@@ -88,10 +92,11 @@ int calculate_meld_points(Tile tiles[], int count);
 
 // Functie folosita de main.c pentru a sorta vizual o suita pe masa
 void sort_run(Tile tiles[], int count);
+void sort_run_with_flags(Tile tiles[], bool face_down[], int tile_owner[], int count);
 
 // Operatiunile mesei (Table operations)
 void init_table(Table *table);
-bool place_meld(Table *table, Tile tiles[], int count, int owner_id);
+bool place_meld(Table *table, Meld *m);
 
 // Extragerea din teancul de decartare (Draw from discard pile)
 void draw_from_discard(Tile discard_pile[], int *discard_count, Player *player);
