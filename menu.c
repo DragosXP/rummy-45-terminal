@@ -29,7 +29,7 @@ bool show_create_account(AccountFile *af, char *created_username) {
     timeout(-1); // Blocking mode
     
     while (1) {
-        clear();
+        erase();
         draw_title(2);
         
         attron(COLOR_PAIR(6) | A_BOLD);
@@ -132,7 +132,7 @@ int show_account_selection(AccountFile *af, char *active_username) {
     timeout(-1);
     
     while (1) {
-        clear();
+        erase();
         draw_title(1);
         
         attron(COLOR_PAIR(6) | A_BOLD);
@@ -226,7 +226,7 @@ MenuChoice show_main_menu(const char *active_username, int total_score) {
     timeout(-1);
     
     while (1) {
-        clear();
+        erase();
         draw_title(2);
         
         // Afisare utilizator curent
@@ -327,7 +327,7 @@ bool show_create_room_lobby(RoomState *room, AccountFile *af, const char *host_u
     // Creeaza server
     int server_fd = net_create_server();
     if (server_fd < 0) {
-        clear();
+        erase();
         attron(COLOR_PAIR(3) | A_BOLD);
         mvprintw(12, 15, "EROARE: Nu s-a putut crea camera! (Portul %d este ocupat?)", NET_PORT);
         attroff(COLOR_PAIR(3) | A_BOLD);
@@ -372,7 +372,7 @@ bool show_create_room_lobby(RoomState *room, AccountFile *af, const char *host_u
     halfdelay(2); // Non-blocking cu 200ms timeout
     
     while (1) {
-        clear();
+        erase();
         draw_title(1);
         
         attron(COLOR_PAIR(6) | A_BOLD);
@@ -474,7 +474,7 @@ bool show_join_room(RoomState *room, AccountFile *af, const char *username) {
     
     // Ecran de introducere IP
     while (1) {
-        clear();
+        erase();
         draw_title(2);
         
         attron(COLOR_PAIR(6) | A_BOLD);
@@ -531,7 +531,7 @@ bool show_join_room(RoomState *room, AccountFile *af, const char *username) {
             
             // Incearca conectarea
             curs_set(0);
-            clear();
+            erase();
             attron(COLOR_PAIR(8) | A_BOLD);
             mvprintw(12, 15, "Se conecteaza la %s:%d...", ip, port);
             attroff(COLOR_PAIR(8) | A_BOLD);
@@ -610,7 +610,7 @@ bool show_join_room(RoomState *room, AccountFile *af, const char *username) {
             
             // Lobby loop ca client
             while (!room->game_started) {
-                clear();
+                erase();
                 draw_title(1);
                 
                 attron(COLOR_PAIR(6) | A_BOLD);
@@ -654,7 +654,7 @@ bool show_join_room(RoomState *room, AccountFile *af, const char *username) {
                             return true;
                         } else if (type == MSG_DISCONNECT) {
                             net_disconnect(sock);
-                            clear();
+                            erase();
                             attron(COLOR_PAIR(3) | A_BOLD);
                             mvprintw(12, 15, "Host-ul a inchis camera!");
                             attroff(COLOR_PAIR(3) | A_BOLD);
@@ -703,7 +703,7 @@ void show_countdown(RoomState *room) {
     timeout(-1);
     
     for (int i = countdown; i >= 0; i--) {
-        clear();
+        erase();
         draw_title(3);
         
         attron(COLOR_PAIR(6) | A_BOLD);
