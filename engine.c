@@ -59,6 +59,10 @@ void shuffle_deck(Deck *deck) {
 
 void deal_hands(Deck *deck, Player players[], int num_players, int starting_player_idx) {
     for (int i = 0; i < num_players; i++) {
+        // Salvam username-ul inainte de reset
+        char saved_username[11];
+        strncpy(saved_username, players[i].username, 11);
+        
         players[i].tile_count = 0;
         players[i].has_melded = false;
         players[i].drew_from_discard_this_turn = false;
@@ -67,6 +71,9 @@ void deal_hands(Deck *deck, Player players[], int num_players, int starting_play
         players[i].melded_this_turn = false; // Initializare G1
         players[i].pending_jokers_to_place_face_down = 0;
         players[i].drew_atu_this_turn = false;
+        
+        // Restauram username-ul
+        strncpy(players[i].username, saved_username, 11);
     }
 
     for (int i = 0; i < 14; i++) {

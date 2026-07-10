@@ -1,10 +1,14 @@
 #include "rummy.h"
 #include "logger.h"
+#include "accounts.h"
+#include "network.h"
+#include "menu.h"
 #include <ncurses.h>
 #include <stdlib.h>
 #include <locale.h>
 #include <string.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 // Global board states to map 2D grid boards to flat Player hand structs
 Tile boards[MAX_PLAYERS][2][15];
@@ -24,6 +28,13 @@ int deck_pile_sizes[20];
 bool meld_selection_mode = false;
 bool cursor_on_board_during_draw = false;
 int attach_side = 0; // 0 = Left, 1 = Right
+
+// ===== Multiplayer globals =====
+RoomState g_room;          // Starea camerei de joc
+AccountFile g_accounts;    // Fisierul de conturi
+char g_active_username[11] = ""; // Username-ul activ
+int g_local_player_index = 0;    // Indexul jucatorului local
+bool g_is_networked = false;     // True daca jocul e in multiplayer retea
 
 GameState state = STATE_DRAW;
 bool is_holding = false;
@@ -149,7 +160,6 @@ void show_end_game_screen(int winner_idx, bool deck_empty, Player players[], Tab
         attroff(COLOR_PAIR(5) | A_BOLD);
     }
     
-    char usernames[4][11] = {"Dragos715", "0Gabriela0", "KasaneTeto", "Messi"};
     int row = 15;
     attron(COLOR_PAIR(6));
     mvprintw(row++, 30, "── Scoruri Finale ──");
@@ -158,7 +168,7 @@ void show_end_game_screen(int winner_idx, bool deck_empty, Player players[], Tab
     for (int i = 0; i < player_count; i++) {
         if (!deck_empty && i == winner_idx) {
             attron(COLOR_PAIR(7) | A_BOLD);
-            mvprintw(row++, 30, "★ %s: %d puncte (CÂȘTIGĂTOR)", usernames[i], final_scores[i]);
+            mvprintw(row++, 30, "★ %s: %d puncte (CÂȘTIGĂTOR)", players[i].username, final_scores[i]);
             mvprintw(row++, 32, "(Etalat+Lipit: %d pct | Atu: %s | Inchidere: +50)", 
                      table_points[i], has_atu[i] ? "+50" : "0");
             attroff(COLOR_PAIR(7) | A_BOLD);
@@ -167,14 +177,20 @@ void show_end_game_screen(int winner_idx, bool deck_empty, Player players[], Tab
             attron(COLOR_PAIR(6));
             if (!players[i].has_melded) {
                 mvprintw(row++, 30, "  %s: %d pct (Penalizare neetalare %s)", 
-                         usernames[i], final_scores[i], has_atu[i] ? "-100 + 50" : "-100");
+                         players[i].username, final_scores[i], has_atu[i] ? "-100 + 50" : "-100");
             } else {
-                mvprintw(row++, 30, "  %s: %d pct", usernames[i], final_scores[i]);
+                mvprintw(row++, 30, "  %s: %d pct", players[i].username, final_scores[i]);
                 mvprintw(row++, 32, "(Etalat+Lipit: %d pct | Penalizare tabla: -%d pct | Atu: %s)", 
                          table_points[i], hand_penalties[i], has_atu[i] ? "+50" : "0");
             }
             attroff(COLOR_PAIR(6));
             row++;
+        }
+    }
+    // Actualizeaza scorurile in fisierul de conturi
+    for (int i = 0; i < player_count; i++) {
+        if (players[i].username[0] != '\0') {
+            update_account_score(&g_accounts, players[i].username, final_scores[i]);
         }
     }
     
@@ -345,7 +361,6 @@ void init_boards_from_players(Player players[], int num_players) {
 
 // Renders Player info header on Row 0 dynamically
 void draw_header(Player players[], int current_player, GameState state) {
-    char usernames[4][11] = {"Dragos715", "0Gabriela0", "KasaneTeto", "Messi"};
     int counts[MAX_PLAYERS];
 
     for(int i=0; i<player_count; i++) {
@@ -364,9 +379,9 @@ void draw_header(Player players[], int current_player, GameState state) {
         
         if (current_player == i) {
             if (counts[i] <= 3) {
-                snprintf(header_str, sizeof(header_str), "> %d %s (%dp)", counts[i], usernames[i], players[i].score);
+                snprintf(header_str, sizeof(header_str), "> %d %s (%dp)", counts[i], players[i].username, players[i].score);
             } else {
-                snprintf(header_str, sizeof(header_str), ">   %s (%dp)", usernames[i], players[i].score);
+                snprintf(header_str, sizeof(header_str), ">   %s (%dp)", players[i].username, players[i].score);
             }
             
             time_t elapsed = time(NULL) - action_start_time;
@@ -385,16 +400,16 @@ void draw_header(Player players[], int current_player, GameState state) {
             mvprintw(1, col_offsets[i], "%s", bar_str);
             
             if (state == STATE_DRAW) {
-                mvprintw(37, 5, "Este rândul tău, %s. Acțiune: Trage o piesă (de jos sau din decartate).", usernames[i]);
+                mvprintw(37, 5, "Este rândul tău, %s. Acțiune: Trage o piesă (de jos sau din decartate).", players[i].username);
             } else {
-                mvprintw(37, 5, "Este rândul tău, %s. Acțiune: Etalează, lipește sau decartează pentru a încheia tura.", usernames[i]);
+                mvprintw(37, 5, "Este rândul tău, %s. Acțiune: Etalează, lipește sau decartează pentru a încheia tura.", players[i].username);
             }
             attroff(COLOR_PAIR(7) | A_BOLD);
         } else {
             if (counts[i] <= 3) {
-                snprintf(header_str, sizeof(header_str), "  %d %s (%dp)", counts[i], usernames[i], players[i].score);
+                snprintf(header_str, sizeof(header_str), "  %d %s (%dp)", counts[i], players[i].username, players[i].score);
             } else {
-                snprintf(header_str, sizeof(header_str), "    %s (%dp)", usernames[i], players[i].score);
+                snprintf(header_str, sizeof(header_str), "    %s (%dp)", players[i].username, players[i].score);
             }
             
             attron(COLOR_PAIR(6));
@@ -2041,16 +2056,81 @@ void open_debug_menu(Player players[], Table *table, Deck *deck, int current_pla
 }
 
 int main() {
+    init_game_ui();
+    log_event("Joc pornit.");
+
+    // ===== Sistem de conturi si meniu =====
+    load_accounts(&g_accounts);
+
+menu_start:
+    // Selectie cont (forteaza creare daca nu exista conturi)
+    {
+        int acc_result = show_account_selection(&g_accounts, g_active_username);
+        if (acc_result < 0) {
+            // Utilizatorul a dat ESC fara sa selecteze - iesire
+            endwin();
+            return 0;
+        }
+    }
+
+main_menu:
+    {
+        int acc_idx = find_account(&g_accounts, g_active_username);
+        int total_score = (acc_idx >= 0) ? g_accounts.accounts[acc_idx].total_score : 0;
+        
+        MenuChoice choice = show_main_menu(g_active_username, total_score);
+        
+        switch (choice) {
+            case MENU_EXIT:
+                endwin();
+                return 0;
+                
+            case MENU_CHANGE_ACCOUNT:
+                goto menu_start;
+                
+            case MENU_CREATE_ROOM: {
+                memset(&g_room, 0, sizeof(RoomState));
+                bool started = show_create_room_lobby(&g_room, &g_accounts, g_active_username);
+                if (!started) {
+                    goto main_menu;
+                }
+                g_is_networked = true;
+                g_local_player_index = 0; // Host-ul e mereu player 0
+                player_count = g_room.player_count;
+                break;
+            }
+            
+            case MENU_JOIN_ROOM: {
+                memset(&g_room, 0, sizeof(RoomState));
+                bool joined = show_join_room(&g_room, &g_accounts, g_active_username);
+                if (!joined) {
+                    goto main_menu;
+                }
+                g_is_networked = true;
+                g_local_player_index = g_room.local_player_index;
+                player_count = g_room.player_count;
+                break;
+            }
+        }
+    }
+
     if (player_count < 2 || player_count > MAX_PLAYERS) {
         player_count = 4;
     }
 
-    init_game_ui();
-    log_event("Joc pornit.");
-
     Deck deck = {0};
     Player players[MAX_PLAYERS] = {0};
     Table table;
+
+    // Seteaza username-urile jucatorilor din room state
+    for (int i = 0; i < player_count; i++) {
+        if (g_room.players[i].connected) {
+            strncpy(players[i].username, g_room.players[i].username, 10);
+            players[i].username[10] = '\0';
+        } else {
+            snprintf(players[i].username, 11, "Player%d", i + 1);
+        }
+    }
 
     srand(time(NULL));
     int current_player = rand() % player_count;
@@ -2370,19 +2450,8 @@ round_start:
         }
 
         if (global_turn_number == 1 && discard_count == 0 && table.meld_count == 0) {
-            if (ch >= '1' && ch <= '4') {
-                int target_p = ch - '1';
-                if (target_p >= 0 && target_p < player_count) {
-                    current_player = target_p;
-                    cursor_r = 0;
-                    cursor_c = 0;
-                    is_holding = false;
-                    held_r = -1;
-                    held_c = -1;
-                    action_start_time = time(NULL);
-                }
-                continue;
-            }
+            // In multiplayer, nu se mai poate schimba jucatorul cu tastele 1-4
+            // Fiecare jucator vede doar tabla sa privata
 
             if (cursor_r == 2) {
                 if (ch == KEY_UP) {
