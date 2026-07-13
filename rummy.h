@@ -43,6 +43,7 @@ typedef struct {
     int tile_count;
     bool has_melded;
     bool drew_from_discard_this_turn;
+    bool drew_deck_this_turn;
     Tile primary_discard_drawn_tile;
     int score;
     bool melded_this_turn; // Devine true cand jucatorul coboara formatii in tura curenta

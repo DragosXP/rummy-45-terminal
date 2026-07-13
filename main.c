@@ -50,6 +50,35 @@ bool selecting_atu = false;
 extern void sort_run(Tile tiles[], int count);
 int extract_selected_melds(int player_idx, Meld staged[], int *staged_count, int to_clear_r[][30], int to_clear_c[][30], int to_clear_cnt[]);
 
+// Phase 2 Dumb Client UI State
+typedef struct {
+    bool is_holding;
+    int held_r;
+    int held_c;
+    int selected_tiles[2][15]; // Non-zero if selected
+    bool meld_selection_mode;
+    
+    // Discard selection
+    bool selecting_discard;
+    int discard_cursor;
+    int discard_view_start;
+    
+    // Deck selection
+    bool select_deck;
+    bool selecting_atu;
+    
+    // Attachment preview
+    int attach_side; 
+
+    // Local cursor state
+    CursorZone cursor_zone;
+    int cursor_x;
+    int cursor_y;
+} LocalUIState;
+
+LocalUIState g_ui_state = {0};
+
+
 Tile board_stack[MAX_PLAYERS][TOTAL_TILES];
 int board_stack_count[MAX_PLAYERS] = {0};
 
@@ -133,6 +162,7 @@ void show_end_game_screen(int winner_idx, bool deck_empty, Player players[], Tab
         }
     }
     
+#if 0
     if (g_is_networked && g_room.is_host) {
         char ge_buf[NET_BUFFER_SIZE];
         uint32_t ge_len;
@@ -141,6 +171,7 @@ void show_end_game_screen(int winner_idx, bool deck_empty, Player players[], Tab
                                ge_buf, &ge_len);
         net_broadcast(&g_room, MSG_GAME_END, ge_buf, ge_len);
     }
+#endif
 
     // 2. Render screen
     clear();
@@ -388,18 +419,23 @@ void sync_board_to_player(int player_idx, Player *player) {
             if (r == 0 && c == 14 && board_stack_count[player_idx] > 0) {
                 // If it is the stack slot, add the entire stack to the hand
                 for (int i = 0; i < board_stack_count[player_idx]; i++) {
-                    player->hand[player->tile_count] = board_stack[player_idx][i];
-                    player->tile_count++;
+                    if (player->tile_count < 20) {
+                        player->hand[player->tile_count] = board_stack[player_idx][i];
+                        player->tile_count++;
+                    }
                 }
             } else {
                 if (boards[player_idx][r][c].id != -1) {
-                    player->hand[player->tile_count] = boards[player_idx][r][c];
-                    player->tile_count++;
+                    if (player->tile_count < 20) {
+                        player->hand[player->tile_count] = boards[player_idx][r][c];
+                        player->tile_count++;
+                    }
                 }
             }
         }
     }
 
+#if 0
     if (g_is_networked && !g_room.is_host && player_idx == g_local_player_index) {
         char hand_buf[NET_BUFFER_SIZE];
         uint32_t hand_len;
@@ -408,6 +444,7 @@ void sync_board_to_player(int player_idx, Player *player) {
             net_send_message(g_room.host_socket, MSG_HAND_UPDATE, hand_buf, hand_len);
         }
     }
+#endif
 }
 
 // Populates a tile into the first empty slot on the player's board
@@ -453,62 +490,75 @@ void init_boards_from_players(Player players[], int num_players) {
     }
 }
 
-// Renders Player info header on Row 0 dynamically
-void draw_header(Player players[], int current_player, GameState state) {
-    int counts[MAX_PLAYERS];
+// Forward declarations for drawing functions
+void draw_header(const LocalClientState *state);
+void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_state);
+void draw_discard_pile(const LocalClientState *state, const LocalUIState *ui_state);
+void draw_deck_piles(const LocalClientState *state, const LocalUIState *ui_state);
+void draw_hand(const LocalClientState *state, const LocalUIState *ui_state);
 
-    for(int i=0; i<player_count; i++) {
-        counts[i] = players[i].tile_count;
-        if (current_player == i && state != STATE_DRAW) counts[i]--;
+// Master render frame for Phase 2 Dumb Client
+void render_frame(const LocalClientState *state, const LocalUIState *ui_state) {
+    werase(stdscr); // 1. Full clear
+    
+    // 2. Draw all components based strictly on SSOT + local UI visual state
+    draw_header(state);
+    draw_shared_table(state, ui_state);
+    draw_discard_pile(state, ui_state);
+    draw_deck_piles(state, ui_state);
+    draw_hand(state, ui_state);
+
+    // Render global errors if any (even Dumb Client can show server msgs)
+    if (global_has_error) {
+        struct timeval now;
+        gettimeofday(&now, NULL);
+        if (now.tv_sec - global_error_time.tv_sec > 3) {
+            global_has_error = false;
+        } else {
+            attron(COLOR_PAIR(3) | A_BOLD);
+            mvprintw(36, 5, "%s", global_error_msg);
+            attroff(COLOR_PAIR(3) | A_BOLD);
+        }
     }
 
+    // Phase 2 Debug Info
+    attron(COLOR_PAIR(6));
+    mvprintw(38, 90, "Net: DUMB CLIENT | ID: %d", state->local_player_id);
+    attroff(COLOR_PAIR(6));
+
+    refresh(); // 3. Single double-buffer swap
+}
+
+// Renders Player info header on Row 0 dynamically
+void draw_header(const LocalClientState *state) {
     mvprintw(0, 0, "                                                                                                      ");
     mvprintw(1, 0, "                                                                                                      ");
 
     int col_offsets[4] = {2, 26, 56, 86};
     
-    for(int i=0; i<player_count; i++) {
+    for (int i = 0; i < g_room.player_count; i++) {
         char header_str[128] = "";
-        char bar_str[21] = "####################";
+        char bar_str[21] = "####################"; // Dumb client doesn't compute action time limit right now
         
-        if (current_player == i) {
-            if (counts[i] <= 3) {
-                snprintf(header_str, sizeof(header_str), "> %d %s (%dp)", counts[i], players[i].username, players[i].score);
-            } else {
-                snprintf(header_str, sizeof(header_str), ">   %s (%dp)", players[i].username, players[i].score);
-            }
-            
-            time_t elapsed = time(NULL) - action_start_time;
-            int remaining = action_time_limit - (int)elapsed;
-            if (remaining < 0) remaining = 0;
-            int num_hashes = (remaining * 20) / action_time_limit;
-            if (num_hashes < 0) num_hashes = 0;
-            if (num_hashes > 20) num_hashes = 20;
-            
-            for (int j = 0; j < 20; j++) {
-                bar_str[j] = (j < num_hashes) ? '#' : ' ';
-            }
+        if (state->active_player_id == i) {
+            snprintf(header_str, sizeof(header_str), ">   %s (%dp)", g_room.players[i].username, state->scores[i]);
             
             attron(COLOR_PAIR(7) | A_BOLD);
             mvprintw(0, col_offsets[i], "%s", header_str);
             mvprintw(1, col_offsets[i], "%s", bar_str);
             
-            if (i == g_local_player_index) {
-                if (state == STATE_DRAW) {
-                    mvprintw(37, 5, "Este rândul tău, %s. Acțiune: Trage o piesă (de jos sau din decartate).                ", players[i].username);
+            if (i == state->local_player_id) {
+                if (state->phase == PHASE_DRAW) {
+                    mvprintw(37, 5, "Este rândul tău, %s. Acțiune: Trage o piesă (de jos sau din decartate).                ", g_room.players[i].username);
                 } else {
-                    mvprintw(37, 5, "Este rândul tău, %s. Acțiune: Etalează, lipește sau decartează pentru a încheia tura.  ", players[i].username);
+                    mvprintw(37, 5, "Este rândul tău, %s. Acțiune: Etalează, lipește sau decartează pentru a încheia tura.  ", g_room.players[i].username);
                 }
             } else {
-                mvprintw(37, 5, "Este rândul lui %s, așteaptă-ți rândul...                                              ", players[i].username);
+                mvprintw(37, 5, "Este rândul lui %s, așteaptă-ți rândul...                                              ", g_room.players[i].username);
             }
             attroff(COLOR_PAIR(7) | A_BOLD);
         } else {
-            if (counts[i] <= 3) {
-                snprintf(header_str, sizeof(header_str), "  %d %s (%dp)", counts[i], players[i].username, players[i].score);
-            } else {
-                snprintf(header_str, sizeof(header_str), "    %s (%dp)", players[i].username, players[i].score);
-            }
+            snprintf(header_str, sizeof(header_str), "    %s (%dp)", g_room.players[i].username, state->scores[i]);
             
             attron(COLOR_PAIR(6));
             mvprintw(0, col_offsets[i], "%s", header_str);
@@ -581,7 +631,7 @@ bool can_attach_tile_to_side(Meld *meld, Tile tile, int side) {
             }
         }
         // Check color compatibility
-        if (tile.number != 0 && run_color != -1 && tile.color != run_color) {
+        if (tile.number != 0 && run_color != -1 && tile.color != (Color)run_color) {
             return false;
         }
 
@@ -796,7 +846,7 @@ void table_nav_down(int *cc, Table *table) {
 }
 
 // Renders the shared table (all played melds) at rows 1-13
-void draw_shared_table(Table *table, bool is_holding, int cursor_r, int cursor_c, int current_player, int held_r, int held_c) {
+void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_state) {
     for (int r = 2; r <= 14; r++) {
         mvprintw(r, 0, "                                                                                                      ");
     }
@@ -804,11 +854,16 @@ void draw_shared_table(Table *table, bool is_holding, int cursor_r, int cursor_c
     int col_starts[4] = {3, 29, 55, 81};
     int player_meld_counts[MAX_PLAYERS] = {0};
 
-    // Get active tile for attachment preview
-    Tile active_tile = get_active_tile(current_player, is_holding, held_r, held_c);
+    // Find the cursor if it is on the board
+    bool has_board_cursor = false;
+    int cursor_m = -1;
+    if (ui_state->cursor_zone == ZONE_BOARD) {
+        has_board_cursor = true;
+        cursor_m = ui_state->cursor_x;
+    }
 
-    for (int m = 0; m < table->meld_count; m++) {
-        Meld *meld = &table->melds[m];
+    for (int m = 0; m < state->table.meld_count; m++) {
+        const Meld *meld = &state->table.melds[m];
         
         int owner = meld->owner_id;
         if (owner < 0 || owner >= MAX_PLAYERS) owner = 0;
@@ -817,289 +872,114 @@ void draw_shared_table(Table *table, bool is_holding, int cursor_r, int cursor_c
         int start_r = 2 + row_idx * 3;
         int start_c = col_starts[owner];
 
-        // Determine if this meld is targeted
-        bool is_targeted = (cursor_r == -1 && cursor_c == m && active_tile.id != -1);
-
-        // Construct the list of tiles to draw
-        Tile draw_tiles[20];
-        bool draw_face_down[20] = {false};
-        int draw_count = 0;
-        int active_tile_idx = -1;
-
-        if (is_targeted) {
-            if (attach_side == 0) {
-                // LEFT attachment: preview card at index 0, shift others right
-                draw_tiles[0] = active_tile;
-                draw_face_down[0] = true; // Attached tile preview is face down
-                active_tile_idx = 0;
-                for (int i = 0; i < meld->count; i++) {
-                    draw_tiles[i + 1] = meld->tiles[i];
-                    draw_face_down[i + 1] = meld->face_down[i];
-                }
-                draw_count = meld->count + 1;
-                start_c = start_c - 3; // Shift start column left to make space
-            } else {
-                // RIGHT attachment: preview card at the end
-                for (int i = 0; i < meld->count; i++) {
-                    draw_tiles[i] = meld->tiles[i];
-                    draw_face_down[i] = meld->face_down[i];
-                }
-                draw_tiles[meld->count] = active_tile;
-                draw_face_down[meld->count] = true; // Attached tile preview is face down
-                active_tile_idx = meld->count;
-                draw_count = meld->count + 1;
-            }
-        } else {
-            for (int i = 0; i < meld->count; i++) {
-                draw_tiles[i] = meld->tiles[i];
-                draw_face_down[i] = meld->face_down[i];
-            }
-            draw_count = meld->count;
-        }
-
+        bool is_targeted = (has_board_cursor && cursor_m == m);
+        int draw_count = meld->count;
         int limit_draw = (draw_count > 7) ? 7 : draw_count;
-        int left_pair = (active_tile_idx == 0) ? 7 : 6;
-        int right_pair = (active_tile_idx == limit_draw - 1) ? 7 : 6;
-        if (is_targeted && is_error_selector_active()) {
-            if (active_tile_idx == 0) left_pair = 3;
-            if (active_tile_idx == limit_draw - 1) right_pair = 3;
-        }
-        int normal_pair = 6;
+        
+        int border_pair = is_targeted ? 7 : 6;
 
-        // If the row reaches exactly 14, only draw the top border of the meld (showing there's more)
         if (start_r > 13) {
             if (start_r == 14) {
-                attron(COLOR_PAIR(left_pair));
+                attron(COLOR_PAIR(border_pair));
                 mvprintw(14, start_c, "┌");
-                attroff(COLOR_PAIR(left_pair));
-
                 for (int t = 0; t < limit_draw; t++) {
-                    int seg_cp = (t == active_tile_idx) ? 7 : 6;
-                    if (t > 0) {
-                        int sep_cp = (t == active_tile_idx || t - 1 == active_tile_idx) ? 7 : 6;
-                        attron(COLOR_PAIR(sep_cp));
-                        printw("┬");
-                        attroff(COLOR_PAIR(sep_cp));
-                    }
-                    attron(COLOR_PAIR(seg_cp));
+                    if (t > 0) printw("┬");
                     printw("──");
-                    attroff(COLOR_PAIR(seg_cp));
                 }
-
-                attron(COLOR_PAIR(right_pair));
                 printw("┐");
-                attroff(COLOR_PAIR(right_pair));
+                attroff(COLOR_PAIR(border_pair));
             }
             continue;
         }
 
         // Draw top border
-        attron(COLOR_PAIR(left_pair));
+        attron(COLOR_PAIR(border_pair));
         mvprintw(start_r, start_c, "┌");
-        attroff(COLOR_PAIR(left_pair));
-
         for (int t = 0; t < limit_draw; t++) {
-            int seg_cp = (t == active_tile_idx) ? 7 : 6;
-            if (t > 0) {
-                int sep_cp = (t == active_tile_idx || t - 1 == active_tile_idx) ? 7 : 6;
-                attron(COLOR_PAIR(sep_cp));
-                printw("┬");
-                attroff(COLOR_PAIR(sep_cp));
-            }
-            attron(COLOR_PAIR(seg_cp));
+            if (t > 0) printw("┬");
             printw("──");
-            attroff(COLOR_PAIR(seg_cp));
         }
-
-        attron(COLOR_PAIR(right_pair));
         printw("┐");
-        attroff(COLOR_PAIR(right_pair));
-
+        
         // Draw middle row containing tile values
-        attron(COLOR_PAIR(left_pair));
         mvprintw(start_r + 1, start_c, "│");
-        attroff(COLOR_PAIR(left_pair));
+        attroff(COLOR_PAIR(border_pair));
 
         for (int t = 0; t < limit_draw; t++) {
             if (draw_count > 7 && t == 3) {
-                int sep_pair = (t == active_tile_idx || t + 1 == active_tile_idx) ? 7 : 6;
-                attron(COLOR_PAIR(normal_pair) | A_BOLD);
+                attron(COLOR_PAIR(6) | A_BOLD);
                 printw("..");
-                attroff(COLOR_PAIR(normal_pair) | A_BOLD);
-                attron(COLOR_PAIR(sep_pair));
-                printw("│");
-                attroff(COLOR_PAIR(sep_pair));
+                attroff(COLOR_PAIR(6) | A_BOLD);
             } else {
                 int actual_idx = t;
-                if (draw_count > 7 && t > 3) {
-                    actual_idx = draw_count - (7 - t);
-                }
-                Tile tile = draw_tiles[actual_idx];
-                bool is_fd = draw_face_down[actual_idx];
+                if (draw_count > 7 && t > 3) actual_idx = draw_count - (7 - t);
+                Tile tile = meld->tiles[actual_idx];
+                bool is_fd = meld->face_down[actual_idx];
+                
                 if (is_fd) {
                     attron(COLOR_PAIR(6) | A_DIM);
                     printw("XX");
                     attroff(COLOR_PAIR(6) | A_DIM);
                 } else {
                     int cp = (tile.number == 0) ? 5 : tile.color + 1;
-
                     attron(COLOR_PAIR(cp) | A_BOLD);
                     if (tile.number == 0) printw(":)");
                     else printw("%2d", tile.number);
                     attroff(COLOR_PAIR(cp) | A_BOLD);
                 }
-
-                int sep_pair = (t == limit_draw - 1) ? right_pair : 
-                               ((t == active_tile_idx || t + 1 == active_tile_idx) ? 7 : 6);
-                attron(COLOR_PAIR(sep_pair));
-                printw("│");
-                attroff(COLOR_PAIR(sep_pair));
             }
+            attron(COLOR_PAIR(border_pair));
+            printw("│");
+            attroff(COLOR_PAIR(border_pair));
         }
 
         // Draw bottom border
-        attron(COLOR_PAIR(left_pair));
+        attron(COLOR_PAIR(border_pair));
         mvprintw(start_r + 2, start_c, "└");
-        attroff(COLOR_PAIR(left_pair));
-
         for (int t = 0; t < limit_draw; t++) {
-            int seg_cp = (t == active_tile_idx) ? 7 : 6;
-            if (t > 0) {
-                int sep_cp = (t == active_tile_idx || t - 1 == active_tile_idx) ? 7 : 6;
-                attron(COLOR_PAIR(sep_cp));
-                printw("┴");
-                attroff(COLOR_PAIR(sep_cp));
-            }
-            attron(COLOR_PAIR(seg_cp));
+            if (t > 0) printw("┴");
             printw("──");
-            attroff(COLOR_PAIR(seg_cp));
         }
-
-        attron(COLOR_PAIR(right_pair));
         printw("┘");
-        attroff(COLOR_PAIR(right_pair));
-    }
-
-    // Renders preview meld if in meld selection mode and cursor is at row -1
-    if (meld_selection_mode && cursor_r == -1 && table->meld_count < MAX_MELDS) {
-        Meld staged[15];
-        int staged_count = 0;
-
-        extract_selected_melds(current_player, staged, &staged_count, NULL, NULL, NULL);
-
-        int pmc = get_player_meld_count(table, current_player);
-        
-        for (int i = 0; i < staged_count; i++) {
-            int preview_count = staged[i].count;
-            Tile *preview_tiles = staged[i].tiles;
-            
-            if (preview_count > 1) {
-                if (is_valid_run(preview_tiles, preview_count)) {
-                    sort_run(preview_tiles, preview_count);
-                }
-
-                int row_idx = pmc + i;
-                int start_r = 2 + row_idx * 3;
-                int start_c = col_starts[current_player];
-
-                int meld_border_pair = 7; // Highlight in Neon Green
-                if (is_error_selector_active()) meld_border_pair = 3;
-                int draw_count = (preview_count > 7) ? 7 : preview_count;
-
-                if (start_r <= 13) {
-                    attron(COLOR_PAIR(meld_border_pair));
-                    // Draw top border
-                    mvprintw(start_r, start_c, "┌");
-                    for (int t = 0; t < draw_count; t++) {
-                        if (t > 0) printw("┬");
-                        printw("──");
-                    }
-                    printw("┐");
-
-                    // Draw middle row containing tile values
-                    mvprintw(start_r + 1, start_c, "│");
-                    attroff(COLOR_PAIR(meld_border_pair));
-
-                    for (int t = 0; t < draw_count; t++) {
-                        if (preview_count > 7 && t == 3) {
-                            attron(COLOR_PAIR(meld_border_pair) | A_BOLD);
-                            printw("..");
-                            attroff(COLOR_PAIR(meld_border_pair) | A_BOLD);
-                        } else {
-                            int actual_idx = t;
-                            if (preview_count > 7 && t > 3) {
-                                actual_idx = preview_count - (7 - t);
-                            }
-                            Tile tile = preview_tiles[actual_idx];
-                            int cp = (tile.number == 0) ? 5 : tile.color + 1;
-
-                            attron(COLOR_PAIR(cp) | A_BOLD);
-                            if (tile.number == 0) printw(":)");
-                            else printw("%2d", tile.number);
-                            attroff(COLOR_PAIR(cp) | A_BOLD);
-                        }
-                        attron(COLOR_PAIR(meld_border_pair));
-                        printw("│");
-                    }
-
-                    // Draw bottom border
-                    mvprintw(start_r + 2, start_c, "└");
-                    for (int t = 0; t < draw_count; t++) {
-                        if (t > 0) printw("┴");
-                        printw("──");
-                    }
-                    printw("┘");
-                    attroff(COLOR_PAIR(meld_border_pair));
-                } else if (start_r == 14) {
-                    // Show top border indicating there is a preview meld at row 14
-                    attron(COLOR_PAIR(meld_border_pair));
-                    mvprintw(14, start_c, "┌");
-                    for (int t = 0; t < draw_count; t++) {
-                        if (t > 0) printw("┬");
-                        printw("──");
-                    }
-                    printw("┐");
-                    attroff(COLOR_PAIR(meld_border_pair));
-                }
-            }
-        }
+        attroff(COLOR_PAIR(border_pair));
     }
 }
 
 // Renders the horizontal shared discard pile at rows 14-16
-void draw_discard_pile(int cursor_index, int view_start, bool is_selecting_discard) {
-    // Clear rows 14-16
+void draw_discard_pile(const LocalClientState *state, const LocalUIState *ui_state) {
     for (int r = 14; r <= 16; r++) {
         mvprintw(r, 0, "                                                                                                      ");
     }
 
-    int limit = discard_count;
-    if (is_selecting_discard && cursor_index == discard_count) {
-        limit = discard_count + 1;
+    int limit = state->discard_count;
+    bool is_selecting_discard = ui_state->selecting_discard;
+    int cursor_index = ui_state->discard_cursor;
+    
+    // Check if network cursor is in discard zone
+    if (ui_state->cursor_zone == ZONE_DISCARD) {
+        is_selecting_discard = true;
+        cursor_index = ui_state->cursor_x;
+    }
+
+    if (is_selecting_discard && cursor_index == state->discard_count) {
+        limit = state->discard_count + 1;
     }
 
     attron(COLOR_PAIR(6));
-    if (view_start > 0) {
-        mvprintw(15, 2, "<");
-    }
-    if (view_start + 22 < limit) {
-        mvprintw(15, 98, ">");
-    }
+    if (ui_state->discard_view_start > 0) mvprintw(15, 2, "<");
+    if (ui_state->discard_view_start + 22 < limit) mvprintw(15, 98, ">");
     attroff(COLOR_PAIR(6));
 
     int visible_count = 22;
     for (int i = 0; i < visible_count; i++) {
-        int idx = view_start + i;
+        int idx = ui_state->discard_view_start + i;
         if (idx >= limit) break;
 
         int col = 5 + i * 4;
         bool is_cursor = (is_selecting_discard && idx == cursor_index);
         int border_pair = is_cursor ? 7 : 6;
-        if (idx == selected_discard_idx) border_pair = 8;
-        else if (is_cursor && is_error_selector_active()) border_pair = 3;
 
-        if (idx == discard_count) {
-            // Draw ghost tile placeholder for discarding
+        if (idx == state->discard_count) {
             attron(COLOR_PAIR(border_pair));
             mvprintw(14, col, "┌──┐");
             mvprintw(15, col, "│  │");
@@ -1108,7 +988,7 @@ void draw_discard_pile(int cursor_index, int view_start, bool is_selecting_disca
             continue;
         }
 
-        Tile tile = discard_pile[idx];
+        Tile tile = state->discard_pile[idx];
         int color_pair = (tile.number == 0) ? 5 : tile.color + 1;
 
         attron(COLOR_PAIR(border_pair));
@@ -1128,16 +1008,21 @@ void draw_discard_pile(int cursor_index, int view_start, bool is_selecting_disca
     }
 }
 
-// Renders the deck piles and trump card (atuu) at rows 17-24
-void draw_deck_piles(int deck_size, bool is_deck_selected, bool is_atu_selected) {
-    // Clear rows 17-25
+void draw_deck_piles(const LocalClientState *state, const LocalUIState *ui_state) {
     for (int r = 17; r <= 25; r++) {
         mvprintw(r, 0, "                                                                                                      ");
     }
 
-    int num_piles = 15 - 2 * player_count;
+    int num_piles = 15 - 2 * g_room.player_count;
     if (num_piles < 1) num_piles = 1;
     if (num_piles > 20) num_piles = 20;
+
+    int deck_pile_sizes[20] = {0};
+    int remaining = state->deck_remaining;
+    for (int i = 0; i < num_piles && remaining > 0; i++) {
+        deck_pile_sizes[i] = (remaining > 7) ? 7 : remaining;
+        remaining -= deck_pile_sizes[i];
+    }
 
     int active_pile_idx = -1;
     for (int i = 0; i < num_piles; i++) {
@@ -1155,20 +1040,15 @@ void draw_deck_piles(int deck_size, bool is_deck_selected, bool is_atu_selected)
         }
     }
 
-    // Render piles
     for (int col_idx = 0; col_idx < num_piles; col_idx++) {
         int col = 5 + col_idx * 4;
         int size = deck_pile_sizes[col_idx];
 
         if (size <= 0) continue;
 
-        bool is_highlighted = (is_deck_selected && col_idx == active_pile_idx) || (is_atu_selected && col_idx == last_active_idx);
+        bool is_highlighted = (ui_state->select_deck && col_idx == active_pile_idx) || (ui_state->selecting_atu && col_idx == last_active_idx);
+        int height = (size > 7) ? 7 : size;
 
-        // Height levels representing card pile thickness
-        int height = size;
-        if (height > 7) height = 7;
-
-        // Bottom border is part of the top card ONLY if height is 1
         int bottom_border_pair = (is_highlighted && height <= 1) ? 7 : 6;
         attron(COLOR_PAIR(bottom_border_pair));
         mvprintw(25, col, "└──┘");
@@ -1182,32 +1062,12 @@ void draw_deck_piles(int deck_size, bool is_deck_selected, bool is_atu_selected)
         mvprintw(top_y, col, "┌──┐");
         attroff(COLOR_PAIR(top_border_pair));
 
-        // Center card row (trump is at the top of the last active pile, others face down)
         int body_border_pair = is_highlighted ? 7 : 6;
-        if (col_idx == last_active_idx && !atu_taken) {
-            // Last column contains the trump card (atuu_tile)
-            int cp = (atuu_tile.number == 0) ? 5 : atuu_tile.color + 1;
-            attron(COLOR_PAIR(body_border_pair));
-            mvprintw(body_y, col, "│");
-            attroff(COLOR_PAIR(body_border_pair));
+        attron(COLOR_PAIR(body_border_pair));
+        mvprintw(body_y, col, "│  │"); // For Dumb Client, we don't display Atu until it's added to LocalClientState
+        attroff(COLOR_PAIR(body_border_pair));
 
-            attron(COLOR_PAIR(cp) | A_BOLD);
-            if (atuu_tile.number == 0) printw(":)");
-            else printw("%2d", atuu_tile.number);
-            attroff(COLOR_PAIR(cp) | A_BOLD);
-
-            attron(COLOR_PAIR(body_border_pair));
-            printw("│");
-            attroff(COLOR_PAIR(body_border_pair));
-        } else {
-            attron(COLOR_PAIR(body_border_pair));
-            mvprintw(body_y, col, "│  │");
-            attroff(COLOR_PAIR(body_border_pair));
-        }
-
-        // Draw stacked look
         for (int h = 1; h < height; h++) {
-            // Only the divider line of stack level 1 (bottom of the top card) is highlighted
             int stack_border_pair = (is_highlighted && h == 1) ? 7 : 6;
             attron(COLOR_PAIR(stack_border_pair));
             mvprintw(body_y + h, col, "├──┤");
@@ -1225,79 +1085,9 @@ int get_board_col(int c) {
     }
 }
 
-typedef struct {
-    int start_c;
-    int end_c;
-    int points;
-} BoardMeld;
-
-static int solve_row_dp(Tile row_tiles[15], int start, int dp_points[16], int dp_next[16]) {
-    if (start >= 15) return 0;
-    if (dp_points[start] != -1) return dp_points[start];
-
-    // Option 1: skip tiles[start]
-    int max_pts = solve_row_dp(row_tiles, start + 1, dp_points, dp_next);
-    int best_next = -1;
-
-    // Option 2: try to form a meld starting at start, ending at end_c
-    for (int end_c = start + 2; end_c < 15; end_c++) {
-        // check if there is any empty tile in [start ... end_c]
-        bool has_empty = false;
-        for (int k = start; k <= end_c; k++) {
-            if (row_tiles[k].id == -1) {
-                has_empty = true;
-                break;
-            }
-        }
-        if (has_empty) {
-            break; // Can't extend past empty tile
-        }
-
-        int len = end_c - start + 1;
-        if (is_valid_meld(&row_tiles[start], len)) {
-            int pts = calculate_meld_points(&row_tiles[start], len);
-            int total_pts = pts + solve_row_dp(row_tiles, end_c + 1, dp_points, dp_next);
-            if (total_pts > max_pts) {
-                max_pts = total_pts;
-                best_next = end_c;
-            }
-        }
-    }
-
-    dp_next[start] = best_next;
-    dp_points[start] = max_pts;
-    return max_pts;
-}
-
-static int get_board_melds(Tile row_tiles[15], BoardMeld melds[5]) {
-    int dp_points[16];
-    int dp_next[16];
-    for (int i = 0; i < 16; i++) {
-        dp_points[i] = -1;
-        dp_next[i] = -1;
-    }
-
-    solve_row_dp(row_tiles, 0, dp_points, dp_next);
-
-    int c = 0;
-    int meld_cnt = 0;
-    while (c < 15) {
-        if (dp_next[c] != -1) {
-            int end_c = dp_next[c];
-            melds[meld_cnt].start_c = c;
-            melds[meld_cnt].end_c = end_c;
-            melds[meld_cnt].points = calculate_meld_points(&row_tiles[c], end_c - c + 1);
-            meld_cnt++;
-            c = end_c + 1;
-        } else {
-            c++;
-        }
-    }
-    return meld_cnt;
-}
 
 // Renders the player's board at rows 26-36
-void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int held_r, int held_c, GameState state) {
+void draw_hand(const LocalClientState *state, const LocalUIState *ui_state) {
     int s = 26;
 
     attron(COLOR_PAIR(6));
@@ -1316,19 +1106,25 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
     }
     attroff(COLOR_PAIR(6));
 
+    // Get cursor position for local player from UI state
+    bool has_net_cursor = false;
+    int net_r = -1;
+    int net_c = -1;
+    if (ui_state->cursor_zone == ZONE_HAND) {
+        has_net_cursor = true;
+        net_r = ui_state->cursor_y;
+        net_c = ui_state->cursor_x;
+    }
+
     for (int r = 0; r < 2; r++) {
         for (int c = 0; c < 15; c++) {
             int col = get_board_col(c);
             int row_y = s + r * 5 + 1;
-            Tile tile = boards[player_idx][r][c];
+            Tile tile = state->private_board[r][c];
 
-            bool is_my_turn_draw = !g_is_networked || (current_player == g_local_player_index);
-            bool hide_cursor = is_my_turn_draw && (state == STATE_DRAW && !cursor_on_board_during_draw);
-            bool is_cursor = (r == cursor_r && c == cursor_c && !hide_cursor) ||
-                             (cursor_r == 2 && r == swap_tile_r[player_idx] && c == swap_tile_c[player_idx]) ||
-                             (swap_pending[player_idx] && r == swap_tile_r[player_idx] && c == swap_tile_c[player_idx]);
-            bool is_held = (is_holding && r == held_r && c == held_c);
-            bool is_selected = selected_tiles[player_idx][r][c];
+            bool is_cursor = (has_net_cursor && net_r == r && net_c == c);
+            bool is_held = (ui_state->is_holding && r == ui_state->held_r && c == ui_state->held_c);
+            bool is_selected = ui_state->selected_tiles[r][c];
 
             if (tile.id != -1) {
                 int cp = (tile.number == 0) ? 5 : tile.color + 1;
@@ -1336,16 +1132,12 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
                 // Priority: Cursor (Green) -> Held (Cyan) -> Selected (Magenta) -> Default (White)
                 int border_pair = 6;
                 if (is_cursor) {
-                    if (swap_pending[player_idx]) {
-                        border_pair = 7; // Green
-                    } else if (cursor_r == 2) {
-                        border_pair = 8; // Aqua
-                    } else {
-                        border_pair = meld_selection_mode ? 12 : 7;
-                        if (is_error_selector_active()) border_pair = 3;
-                    }
-                } else if (is_held) border_pair = 8;
-                else if (is_selected) border_pair = 10;
+                    border_pair = ui_state->meld_selection_mode ? 12 : 7;
+                } else if (is_held) {
+                    border_pair = 8;
+                } else if (is_selected) {
+                    border_pair = 10;
+                }
 
                 attron(COLOR_PAIR(border_pair));
                 mvprintw(row_y, col, "┌────┐");
@@ -1372,20 +1164,10 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
                     attron(COLOR_PAIR(8) | A_BOLD);
                     mvprintw(row_y + 2, col + 2, "▲▲");
                     attroff(COLOR_PAIR(8) | A_BOLD);
-                } else if (r == 0 && c == 14 && board_stack_count[player_idx] > 1) {
-                    attron(COLOR_PAIR(11) | A_BOLD);
-                    mvprintw(row_y + 2, col + 2, "+%d", board_stack_count[player_idx] - 1);
-                    attroff(COLOR_PAIR(11) | A_BOLD);
                 }
             } else {
                 if (is_cursor) {
-                    int cursor_pair = meld_selection_mode ? 12 : 7;
-                    if (swap_pending[player_idx]) {
-                        cursor_pair = 7;
-                    } else if (cursor_r == 2) {
-                        cursor_pair = 8;
-                    }
-                    if (is_error_selector_active()) cursor_pair = 3;
+                    int cursor_pair = ui_state->meld_selection_mode ? 12 : 7;
                     attron(COLOR_PAIR(cursor_pair));
                     mvprintw(row_y, col, "┌────┐");
                     mvprintw(row_y + 1, col, "│    │");
@@ -1401,51 +1183,6 @@ void draw_board(int player_idx, int cursor_r, int cursor_c, bool is_holding, int
                     attroff(COLOR_PAIR(11));
                 }
             }
-        }
-    }
-
-    // --- LOGICA NOUĂ: Scanare grupuri consecutive și afișare punctaj (= XXpct =) ---
-    for (int r = 0; r < 2; r++) {
-        BoardMeld row_melds[5];
-        int meld_cnt = get_board_melds(boards[player_idx][r], row_melds);
-
-        for (int m = 0; m < meld_cnt; m++) {
-            int start_c = row_melds[m].start_c;
-            int end_c = row_melds[m].end_c;
-            int pts = row_melds[m].points;
-
-            // Calculăm coordonatele pentru centrare sub acest grup
-            int col_start = get_board_col(start_c);
-            int col_end = get_board_col(end_c) + 6; // Spans to the end of the last tile
-            int total_width = col_end - col_start;
-
-            char pct_text[32];
-            snprintf(pct_text, sizeof(pct_text), "=%dpct=", pts);
-            int text_len = strlen(pct_text);
-
-            // Create the full bar filled with '='
-            char bar[120];
-            int target_width = total_width;
-            if (target_width >= (int)sizeof(bar)) target_width = (int)sizeof(bar) - 1;
-            memset(bar, '=', target_width);
-            bar[target_width] = '\0';
-
-            // Insert the score text in the center
-            int insert_pos = (target_width - text_len) / 2;
-            if (insert_pos < 0) insert_pos = 0;
-            for (int i = 0; i < text_len && insert_pos + i < target_width; i++) {
-                bar[insert_pos + i] = pct_text[i];
-            }
-
-            // Bordura de jos se află exact la (s + r * 5 + 4)
-            int print_row = s + r * 5 + 4;
-
-            // Printăm scorul activând perechea de culori 13 (alb pe fundal mov)
-            attron(COLOR_PAIR(13) | A_BOLD);
-            mvprintw(print_row, col_start, "%s", bar);
-            attroff(COLOR_PAIR(13) | A_BOLD);
-
-
         }
     }
 }
@@ -2155,353 +1892,534 @@ void open_debug_menu(Player players[], Table *table, Deck *deck, int current_pla
     halfdelay(1);
 }
 
-
 // ===== Network multiplayer support functions =====
+#if 0
 void client_send_action(NetMessageType type, const void *data, uint32_t len); // forward decl
 void host_broadcast_game_state(Player players[], Table *table, Deck *deck);
 
 void client_send_action_struct(NetActionType action_type, int param1, int param2, int param3, int param4) {
-    if (!g_is_networked || g_room.is_host) return;
-    
-    NetAction action;
-    memset(&action, 0, sizeof(NetAction));
-    action.action_type = action_type;
-    action.param1 = param1;
-    action.param2 = param2;
-    action.param3 = param3;
-    action.param4 = param4;
-    
-    if (action_type == ACTION_MELD) {
-        int cnt = 0;
-        for (int r = 0; r < 2; r++) {
-            for (int c = 0; c < 15; c++) {
-                if (selected_tiles[g_local_player_index][r][c] && boards[g_local_player_index][r][c].id != -1) {
-                    action.selected_r[cnt] = r;
-                    action.selected_c[cnt] = c;
-                    cnt++;
-                }
-            }
-        }
-        action.selected_count = cnt;
-    }
-    
-    net_send_message(g_room.host_socket, MSG_PLAYER_ACTION, &action, sizeof(NetAction));
 }
 
 void execute_network_action(NetAction *action, int client_idx, Player players[], Table *table, Deck *deck, int *curr_player, int *running) {
-    Player *active = &players[client_idx];
-    
-    // SSOT Validation: Only the active player can perform game actions.
-    // ACTION_MOVE_TILE is the sole exception — WAITING_PLAYERs can reorganize their private board.
-    if (action->action_type != ACTION_MOVE_TILE && client_idx != *curr_player) {
-        return; // Silently reject — client is not the active player
-    }
-    
-    switch (action->action_type) {
-        case ACTION_DRAW_DECK: {
-            int prev = active->tile_count;
-            draw_from_deck(deck, active);
-            if (deck->size == 0) {
-                show_end_game_screen(-1, true, players, table);
-                break;
-            }
-            if (active->tile_count > prev) {
-                int num_p = 15 - 2 * player_count;
-                if (num_p < 1) num_p = 1;
-                int first_active = -1;
-                for (int i = 0; i < num_p; i++) {
-                    if (deck_pile_sizes[i] > 0) {
-                        first_active = i;
-                        break;
-                    }
-                }
-                if (first_active != -1) {
-                    deck_pile_sizes[first_active]--;
-                    if (deck_pile_sizes[first_active] == 0) {
-                        for (int j = first_active; j < num_p - 1; j++) {
-                            deck_pile_sizes[j] = deck_pile_sizes[j + 1];
-                        }
-                        deck_pile_sizes[num_p - 1] = 0;
-                    }
-                }
-                Tile drawn_card = active->hand[active->tile_count - 1];
-                add_tile_to_board(client_idx, drawn_card);
-                sync_board_to_player(client_idx, active);
-            }
-            state = STATE_PLAY;
-            action_start_time = time(NULL);
-            action_time_limit = 25;
-            break;
+}
+#endif
+void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetPacket *out_pkt) {
+    CursorZone z = ui->cursor_zone;
+    int cx = ui->cursor_x;
+    int cy = ui->cursor_y;
+
+    if (ch == 'c' || ch == 'C') {
+        ui->meld_selection_mode = !ui->meld_selection_mode;
+        ui->is_holding = false;
+        ui->held_r = -1;
+        ui->held_c = -1;
+        for (int r = 0; r < 2; r++) {
+            for (int c = 0; c < 15; c++) ui->selected_tiles[r][c] = 0;
         }
-        case ACTION_DRAW_DISCARD: {
-            int disc_cursor = action->param1;
-            int dest_r = action->param2;
-            int dest_c = action->param3;
-            
-            Tile primary_tile = discard_pile[disc_cursor];
-            boards[client_idx][dest_r][dest_c] = primary_tile;
-            
-            undo_discard_count_restore = discard_count;
-            undo_discard_drawn_count = 0;
-            for (int i = disc_cursor; i < discard_count; i++) {
-                undo_discard_drawn_tiles[undo_discard_drawn_count++] = discard_pile[i];
-            }
-            for (int i = disc_cursor + 1; i < discard_count; i++) {
-                if (board_stack_count[client_idx] == 0 && boards[client_idx][0][14].id != -1 && !(dest_r == 0 && dest_c == 14)) {
-                    board_stack[client_idx][board_stack_count[client_idx]++] = boards[client_idx][0][14];
-                }
-                board_stack[client_idx][board_stack_count[client_idx]++] = discard_pile[i];
-            }
-            if (disc_cursor + 1 < discard_count) {
-                boards[client_idx][0][14] = board_stack[client_idx][board_stack_count[client_idx] - 1];
-            }
-            active->drew_from_discard_this_turn = true;
-            active->primary_discard_drawn_tile = primary_tile;
-            discard_count = disc_cursor;
-            sync_board_to_player(client_idx, active);
-            state = STATE_PLAY;
-            action_start_time = time(NULL);
-            action_time_limit = 25;
-            break;
+    } else if (ch == 'x' || ch == 'X') {
+        ui->is_holding = false;
+        ui->held_r = -1;
+        ui->held_c = -1;
+        for (int r = 0; r < 2; r++) {
+            for (int c = 0; c < 15; c++) ui->selected_tiles[r][c] = 0;
         }
-        case ACTION_DRAW_ATU: {
-            if (!atu_taken) {
-                atu_taken = true;
-                active->drew_atu_this_turn = true;
-                active->hand[active->tile_count] = atuu_tile;
-                active->tile_count++;
-                
-                int num_p = 15 - 2 * player_count;
-                if (num_p < 1) num_p = 1;
-                int last_active_idx = -1;
-                for (int i = num_p - 1; i >= 0; i--) {
-                    if (deck_pile_sizes[i] > 0) {
-                        last_active_idx = i;
-                        break;
-                    }
-                }
-                if (last_active_idx != -1) {
-                    deck_pile_sizes[last_active_idx]--;
-                    if (deck_pile_sizes[last_active_idx] == 0) {
-                        for (int j = last_active_idx; j < num_p - 1; j++) {
-                            deck_pile_sizes[j] = deck_pile_sizes[j + 1];
-                        }
-                        deck_pile_sizes[num_p - 1] = 0;
-                    }
-                }
-                deck->size--;
-                
-                add_tile_to_board(client_idx, atuu_tile);
-                sync_board_to_player(client_idx, active);
-                state = STATE_PLAY;
-                action_start_time = time(NULL);
-                action_time_limit = 25;
-            }
-            break;
+        if (z == ZONE_BOARD || z == ZONE_DISCARD) {
+            ui->cursor_zone = ZONE_HAND;
+            ui->cursor_x = 0;
+            ui->cursor_y = 0;
+            ui->selecting_discard = false;
+            ui->select_deck = false;
+            ui->selecting_atu = false;
         }
-        case ACTION_DISCARD: {
-            int r = action->param1;
-            int c = action->param2;
-            if (r < 0 || r >= 2 || c < 0 || c >= 15) break;
-            
-            if (discard_count == 0) {
-                first_discard_tile_id = boards[client_idx][r][c].id;
+    } else if (ch == KEY_LEFT) {
+        if (z == ZONE_HAND) {
+            if (cx > 0) cx--; else cx = 14;
+        } else if (z == ZONE_BOARD) {
+            if (ui->attach_side == 1) ui->attach_side = 0;
+            else {
+                if (cx > 0) { cx--; ui->attach_side = 1; }
+                else { cx = state->table.meld_count > 0 ? state->table.meld_count - 1 : 0; ui->attach_side = 1; }
             }
-            discard_pile[discard_count++] = boards[client_idx][r][c];
-            boards[client_idx][r][c].id = -1;
-            boards[client_idx][r][c].number = -1;
-            sync_board_to_player(client_idx, active);
-            
-            if (active->tile_count == 0) {
-                show_end_game_screen(client_idx, false, players, table);
-            } else {
-                saved_board_r[client_idx] = r;
-                saved_board_c[client_idx] = c;
-                active->drew_from_discard_this_turn = false;
-                active->drew_atu_this_turn = false;
-                
-                *curr_player = (*curr_player - 1 + player_count) % player_count;
-                action_start_time = time(NULL);
-                action_time_limit = (global_turn_number == 1) ? 60 : 25;
-                global_turn_number++;
-                players[*curr_player].melded_this_turn = false;
-                players[*curr_player].drew_from_discard_this_turn = false;
-                players[*curr_player].drew_atu_this_turn = false;
-                players[*curr_player].pending_jokers_to_place_face_down = 0;
-                
-                char log_msg[128];
-                snprintf(log_msg, sizeof(log_msg), "Tura %d. Jucator curent: %d", global_turn_number, *curr_player + 1);
-                log_event(log_msg);
-                state = STATE_DRAW;
+        } else if (z == ZONE_DISCARD) {
+            if (ui->selecting_discard) {
+                if (ui->discard_cursor > 0) ui->discard_cursor--;
+                if (ui->discard_cursor < ui->discard_view_start) ui->discard_view_start = ui->discard_cursor;
+                cx = ui->discard_cursor;
+            } else if (ui->select_deck) {
+                ui->select_deck = false;
+                ui->selecting_atu = true;
+            } else if (ui->selecting_atu) {
+                ui->select_deck = true;
+                ui->selecting_atu = false;
             }
-            break;
         }
-        case ACTION_MOVE_TILE: {
-            int from_r = action->param1;
-            int from_c = action->param2;
-            int to_r = action->param3;
-            int to_c = action->param4;
-            if (from_r < 0 || from_r >= 2 || from_c < 0 || from_c >= 15) break;
-            if (to_r < 0 || to_r >= 2 || to_c < 0 || to_c >= 15) break;
-            
-            Tile temp = boards[client_idx][to_r][to_c];
-            boards[client_idx][to_r][to_c] = boards[client_idx][from_r][from_c];
-            boards[client_idx][from_r][from_c] = temp;
-            
-            bool temp_sel = selected_tiles[client_idx][to_r][to_c];
-            selected_tiles[client_idx][to_r][to_c] = selected_tiles[client_idx][from_r][from_c];
-            selected_tiles[client_idx][from_r][from_c] = temp_sel;
-            
-            sync_board_to_player(client_idx, active);
-            break;
+    } else if (ch == KEY_RIGHT) {
+        if (z == ZONE_HAND) {
+            if (cx < 14) cx++; else cx = 0;
+        } else if (z == ZONE_BOARD) {
+            if (ui->attach_side == 0) ui->attach_side = 1;
+            else {
+                if (cx < state->table.meld_count - 1) { cx++; ui->attach_side = 0; }
+                else { cx = 0; ui->attach_side = 0; }
+            }
+        } else if (z == ZONE_DISCARD) {
+            if (ui->selecting_discard) {
+                if (ui->discard_cursor < state->discard_count - 1) ui->discard_cursor++;
+                if (ui->discard_cursor >= ui->discard_view_start + 22) ui->discard_view_start = ui->discard_cursor - 21;
+                cx = ui->discard_cursor;
+            } else if (ui->select_deck) {
+                ui->select_deck = false;
+                ui->selecting_atu = true;
+            } else if (ui->selecting_atu) {
+                ui->select_deck = true;
+                ui->selecting_atu = false;
+            }
         }
-        case ACTION_MELD: {
-            for (int r = 0; r < 2; r++) {
-                for (int c = 0; c < 15; c++) {
-                    selected_tiles[client_idx][r][c] = false;
+    } else if (ch == KEY_UP) {
+        if (z == ZONE_HAND) {
+            if (cy == 1) cy = 0;
+            else if (cy == 0) {
+                if (ui->meld_selection_mode || ui->is_holding) {
+                    ui->cursor_zone = ZONE_BOARD;
+                    cy = 0;
+                    cx = 0;
+                } else {
+                    ui->cursor_zone = ZONE_DISCARD;
+                    ui->select_deck = true;
+                    ui->selecting_discard = false;
+                    cy = 0;
+                    cx = 0;
                 }
             }
-            for (int i = 0; i < action->selected_count; i++) {
-                selected_tiles[client_idx][action->selected_r[i]][action->selected_c[i]] = true;
+        } else if (z == ZONE_DISCARD) {
+            if (ui->select_deck || ui->selecting_atu) {
+                ui->select_deck = false;
+                ui->selecting_atu = false;
+                ui->selecting_discard = true;
+                ui->discard_cursor = state->discard_count > 0 ? state->discard_count - 1 : 0;
+                cx = ui->discard_cursor;
+            } else if (ui->selecting_discard) {
+                ui->selecting_discard = false;
+                ui->cursor_zone = ZONE_BOARD;
+                cy = 0;
+                cx = 0;
             }
-            int status = play_selected_meld(client_idx, active, table);
-            if (status == 0) {
-                action_start_time = time(NULL);
-                action_time_limit = 25;
-                if (active->tile_count == 1) {
-                    int rem_r = -1, rem_c = -1;
-                    for (int r = 0; r < 2; r++) {
-                        for (int c = 0; c < 15; c++) {
-                            if (boards[client_idx][r][c].id != -1) {
-                                rem_r = r;
-                                rem_c = c;
-                                break;
-                            }
-                        }
-                        if (rem_r != -1) break;
-                    }
-                    if (rem_r != -1 && rem_c != -1) {
-                        discard_pile[discard_count++] = boards[client_idx][rem_r][rem_c];
-                        boards[client_idx][rem_r][rem_c].id = -1;
-                        boards[client_idx][rem_r][rem_c].number = -1;
-                        active->tile_count = 0;
-                        sync_board_to_player(client_idx, active);
-                    }
-                }
-                if (active->tile_count == 0) {
-                    show_end_game_screen(client_idx, false, players, table);
-                }
-            }
-            break;
         }
-        case ACTION_ATTACH: {
-            int meld_idx = action->param1;
-            int sel_r = action->param2;
-            int sel_c = action->param3;
-            int side = action->param4;
-            if (sel_r < 0 || sel_r >= 2 || sel_c < 0 || sel_c >= 15) break;
-            if (meld_idx < 0 || meld_idx >= table->meld_count) break;
-            
-            Tile tile = boards[client_idx][sel_r][sel_c];
-            if (attach_tile_to_meld_side(table, meld_idx, tile, side, client_idx)) {
-                active->score += tile.points;
-                if (tile.number == 0 && active->pending_jokers_to_place_face_down > 0) {
-                    active->pending_jokers_to_place_face_down--;
-                }
-                boards[client_idx][sel_r][sel_c].id = -1;
-                boards[client_idx][sel_r][sel_c].number = -1;
-                sync_board_to_player(client_idx, active);
-                action_start_time = time(NULL);
-                action_time_limit = 25;
+    } else if (ch == KEY_DOWN) {
+        if (z == ZONE_DISCARD) {
+            if (ui->select_deck || ui->selecting_atu) {
+                ui->select_deck = false;
+                ui->selecting_atu = false;
+                ui->cursor_zone = ZONE_HAND;
+                cy = 0;
+                cx = 0;
+            } else if (ui->selecting_discard) {
+                ui->selecting_discard = false;
+                ui->select_deck = true;
             }
-            break;
+        } else if (z == ZONE_BOARD) {
+            ui->cursor_zone = ZONE_DISCARD;
+            ui->selecting_discard = true;
+            ui->select_deck = false;
+            ui->selecting_atu = false;
+            ui->discard_cursor = state->discard_count > 0 ? state->discard_count - 1 : 0;
+            cx = ui->discard_cursor;
+        } else if (z == ZONE_HAND) {
+            if (cy == 0) cy = 1;
         }
-        case ACTION_REPLACE_JOKER: {
-            int meld_idx = action->param1;
-            int sel_r = action->param2;
-            int sel_c = action->param3;
-            if (sel_r < 0 || sel_r >= 2 || sel_c < 0 || sel_c >= 15) break;
-            if (meld_idx < 0 || meld_idx >= table->meld_count) break;
-            
-            Tile tile = boards[client_idx][sel_r][sel_c];
-            int joker_idx = -1;
-            if (can_replace_joker(&table->melds[meld_idx], tile, &joker_idx)) {
-                Tile joker_tile = table->melds[meld_idx].tiles[joker_idx];
-                joker_tile.number = 0;
-                joker_tile.color = JOKER_COLOR;
-                joker_tile.points = 50;
-                
-                table->melds[meld_idx].tiles[joker_idx] = tile;
-                table->melds[meld_idx].face_down[joker_idx] = true;
-                table->melds[meld_idx].tile_owner[joker_idx] = client_idx;
-                if (is_valid_run(table->melds[meld_idx].tiles, table->melds[meld_idx].count)) {
-                    sort_run_with_flags(table->melds[meld_idx].tiles, table->melds[meld_idx].face_down, table->melds[meld_idx].tile_owner, table->melds[meld_idx].count);
-                }
-                boards[client_idx][sel_r][sel_c] = joker_tile;
-                active->pending_jokers_to_place_face_down++;
-                sync_board_to_player(client_idx, active);
-                action_start_time = time(NULL);
-                action_time_limit = 25;
+    } else if (ch == 'd' || ch == 'D') {
+        if (z == ZONE_HAND && state->private_board[cy][cx].id != -1) {
+            if (out_pkt) {
+                memset(out_pkt, 0, sizeof(NetPacket));
+                out_pkt->type = REQ_DISCARD_TILE;
+                out_pkt->sender_id = state->local_player_id;
+                out_pkt->payload.req_action.hand_index = cy * 15 + cx;
             }
-            break;
         }
-        case ACTION_UNDO_DRAW_DISCARD: {
-            if (active->drew_from_discard_this_turn) {
+    } else if (ch == '\n' || ch == '\r' || ch == 10) {
+        if (z == ZONE_HAND && ui->meld_selection_mode) {
+            if (out_pkt) {
+                memset(out_pkt, 0, sizeof(NetPacket));
+                out_pkt->type = REQ_PLAY_MELDS;
+                out_pkt->sender_id = state->local_player_id;
+                out_pkt->payload.req_play.count = 0;
                 for (int r = 0; r < 2; r++) {
                     for (int c = 0; c < 15; c++) {
-                        for (int i = 0; i < undo_discard_drawn_count; i++) {
-                            if (boards[client_idx][r][c].id == undo_discard_drawn_tiles[i].id) {
-                                boards[client_idx][r][c].id = -1;
-                                boards[client_idx][r][c].number = -1;
-                                selected_tiles[client_idx][r][c] = false;
+                        if (ui->selected_tiles[r][c] && state->private_board[r][c].id != -1) {
+                            if (out_pkt->payload.req_play.count < 20) {
+                                out_pkt->payload.req_play.hand_indices[out_pkt->payload.req_play.count++] = r * 15 + c;
                             }
                         }
                     }
                 }
-                board_stack_count[client_idx] = 0;
-                discard_count = undo_discard_count_restore - undo_discard_drawn_count;
-                for (int i = 0; i < undo_discard_drawn_count; i++) {
-                    discard_pile[discard_count++] = undo_discard_drawn_tiles[i];
+                
+                // Clear selection locally
+                for (int r = 0; r < 2; r++) {
+                    for (int c = 0; c < 15; c++) ui->selected_tiles[r][c] = 0;
                 }
-                active->drew_from_discard_this_turn = false;
-                sync_board_to_player(client_idx, active);
-                state = STATE_DRAW;
-                select_deck = true;
+                ui->meld_selection_mode = false;
             }
-            break;
+        } else if (z == ZONE_BOARD) {
+            int selected_count = 0;
+            int sel_r = -1, sel_c = -1;
+            for (int r = 0; r < 2; r++) {
+                for (int c = 0; c < 15; c++) {
+                    if (ui->selected_tiles[r][c] && state->private_board[r][c].id != -1) {
+                        selected_count++;
+                        sel_r = r;
+                        sel_c = c;
+                    }
+                }
+            }
+            if (selected_count == 1 && out_pkt) {
+                memset(out_pkt, 0, sizeof(NetPacket));
+                out_pkt->type = REQ_REPLACE_JOKER;
+                out_pkt->sender_id = state->local_player_id;
+                out_pkt->payload.req_replace_joker.hand_index = sel_r * 15 + sel_c;
+                out_pkt->payload.req_replace_joker.table_meld_index = cx;
+                
+                for (int r = 0; r < 2; r++) {
+                    for (int c = 0; c < 15; c++) ui->selected_tiles[r][c] = 0;
+                }
+                ui->meld_selection_mode = false;
+            }
         }
-        default:
-            break;
+    } else if (ch == 'z' || ch == 'Z') {
+        if (z == ZONE_HAND) {
+            if (ui->meld_selection_mode) {
+                if (state->private_board[cy][cx].id != -1) {
+                    ui->selected_tiles[cy][cx] = !ui->selected_tiles[cy][cx];
+                } else {
+                    for (int r = 0; r < 2; r++) {
+                        for (int c = 0; c < 15; c++) ui->selected_tiles[r][c] = 0;
+                    }
+                }
+            } else {
+                if (!ui->is_holding) {
+                    if (state->private_board[cy][cx].id != -1) {
+                        ui->is_holding = true;
+                        ui->held_r = cy;
+                        ui->held_c = cx;
+                    }
+                } else {
+                    if (out_pkt) {
+                        memset(out_pkt, 0, sizeof(NetPacket));
+                        out_pkt->type = REQ_SWAP_TILES;
+                        out_pkt->sender_id = state->local_player_id;
+                        out_pkt->payload.req_swap.index1 = ui->held_r * 15 + ui->held_c;
+                        out_pkt->payload.req_swap.index2 = cy * 15 + cx;
+                    }
+
+
+                    ui->is_holding = false;
+                    ui->held_r = -1;
+                    ui->held_c = -1;
+                }
+            }
+        } else if (z == ZONE_BOARD) {
+            if (out_pkt && ui->is_holding) {
+                memset(out_pkt, 0, sizeof(NetPacket));
+                out_pkt->type = REQ_ADD_LIPITURA;
+                out_pkt->sender_id = state->local_player_id;
+                out_pkt->payload.req_lipitura.hand_index = ui->held_r * 15 + ui->held_c;
+                out_pkt->payload.req_lipitura.table_meld_index = cx;
+                out_pkt->payload.req_lipitura.side = ui->attach_side;
+                
+                ui->is_holding = false;
+                ui->held_r = -1;
+                ui->held_c = -1;
+                ui->cursor_zone = ZONE_HAND;
+                cy = 0; cx = 0;
+            }
+        } else if (z == ZONE_DISCARD) {
+            if (out_pkt) {
+                memset(out_pkt, 0, sizeof(NetPacket));
+                out_pkt->type = REQ_DRAW_TILE;
+                out_pkt->sender_id = state->local_player_id;
+                if (ui->select_deck) {
+                    out_pkt->payload.req_draw.source = SRC_DECK;
+                    out_pkt->payload.req_draw.discard_index = -1;
+                } else if (ui->selecting_discard) {
+                    out_pkt->payload.req_draw.source = SRC_DISCARD;
+                    out_pkt->payload.req_draw.discard_index = cx;
+                }
+            }
+        }
     }
-    
-    // Broadcast state to everyone
-    host_broadcast_game_state(players, table, deck);
+
+    if (ui->cursor_zone == z) {
+        ui->cursor_x = cx;
+        ui->cursor_y = cy;
+    }
 }
 
-void host_broadcast_game_state(Player players[], Table *table, Deck *deck) {
-    if (!g_is_networked || !g_room.is_host) return;
+void server_broadcast_sync(RoomState *room, int current_player, Table *table, Deck *deck) {
+    if (!g_is_networked || !room->is_host) return;
+    
+    NetPacket pkt;
+    
+    // SYNC_GAME_STATE
+    memset(&pkt, 0, sizeof(NetPacket));
+    pkt.type = SYNC_GAME_STATE;
+    pkt.sender_id = 0;
+    pkt.payload.sync_state.active_player_id = current_player;
+    pkt.payload.sync_state.current_phase = PHASE_DRAW; // Or calculate based on state
+    
+    for (int i = 1; i < room->player_count; i++) {
+        if (room->client_sockets[i] >= 0) {
+            net_send_packet(room->client_sockets[i], &pkt);
+        }
+    }
+    
+    // SYNC_PUBLIC_BOARD
+    memset(&pkt, 0, sizeof(NetPacket));
+    pkt.type = SYNC_PUBLIC_BOARD;
+    pkt.sender_id = 0;
+    pkt.payload.sync_board.table = *table;
+    pkt.payload.sync_board.discard_count = discard_count;
+    pkt.payload.sync_board.remaining_deck_cards = deck->size;
+    for(int j=0; j<discard_count; j++) {
+        pkt.payload.sync_board.discard_pile[j] = discard_pile[j];
+    }
+    
+    for (int i = 1; i < room->player_count; i++) {
+        if (room->client_sockets[i] >= 0) {
+            net_send_packet(room->client_sockets[i], &pkt);
+        }
+    }
+}
+// ========== SERVER GATEKEEPER ==========
+void server_process_packet(RoomState *room, NetPacket *packet, Player players[], Tile boards[NET_MAX_PLAYERS][2][15], Table *table, Deck *deck, int *current_player) {
+    if (packet->type == REQ_SWAP_TILES) {
+        int p_idx = packet->sender_id;
+        if (p_idx >= 0 && p_idx < room->player_count) {
+            int i1 = packet->payload.req_swap.index1;
+            int i2 = packet->payload.req_swap.index2;
+            int r1 = i1 / 15; int c1 = i1 % 15;
+            int r2 = i2 / 15; int c2 = i2 % 15;
+            if (r1 >= 0 && r1 < 2 && c1 >= 0 && c1 < 15 && r2 >= 0 && r2 < 2 && c2 >= 0 && c2 < 15) {
+                Tile tmp = boards[p_idx][r1][c1];
+                boards[p_idx][r1][c1] = boards[p_idx][r2][c2];
+                boards[p_idx][r2][c2] = tmp;
+                
+                if (room->client_sockets[p_idx] >= 0) {
+                    NetPacket sync_pkt;
+                    memset(&sync_pkt, 0, sizeof(NetPacket));
+                    sync_pkt.type = SYNC_PRIVATE_HAND;
+                    sync_pkt.sender_id = 0;
+                    sync_pkt.payload.sync_hand.tile_count = players[p_idx].tile_count;
+                    sync_pkt.payload.sync_hand.has_melded = players[p_idx].has_melded;
+                    memcpy(sync_pkt.payload.sync_hand.private_board, boards[p_idx], sizeof(Tile) * 2 * 15);
+                    net_send_packet(room->client_sockets[p_idx], &sync_pkt);
+                }
+            }
+        }
+    } else if (packet->type == REQ_DRAW_TILE) {
+        int p_idx = packet->sender_id;
+        if (p_idx >= 0 && p_idx < room->player_count && *current_player == p_idx && !players[p_idx].drew_from_discard_this_turn && !players[p_idx].drew_deck_this_turn) {
+            if (packet->payload.req_draw.source == SRC_DECK) {
+                if (deck->size > 0) {
+                    Tile t = deck->tiles[--deck->size];
+                    add_tile_to_board(p_idx, t);
+                    players[p_idx].drew_deck_this_turn = true;
+                }
+            } else if (packet->payload.req_draw.source == SRC_DISCARD) {
+                int d_idx = packet->payload.req_draw.discard_index;
+                if (d_idx >= 0 && d_idx < discard_count) {
+                    // Logic to draw from discard (in Rummy 45 usually you take the last one or multiple)
+                    // For simplicity let's take the top tile (d_idx should be discard_count - 1)
+                    if (d_idx == discard_count - 1) {
+                        Tile t = discard_pile[--discard_count];
+                        add_tile_to_board(p_idx, t);
+                        players[p_idx].drew_from_discard_this_turn = true;
+                    }
+                }
+            }
+            
+            // Sync private hand
+            if (room->client_sockets[p_idx] >= 0) {
+                NetPacket sync_pkt;
+                memset(&sync_pkt, 0, sizeof(NetPacket));
+                sync_pkt.type = SYNC_PRIVATE_HAND;
+                sync_pkt.sender_id = 0;
+                sync_pkt.payload.sync_hand.tile_count = players[p_idx].tile_count;
+                sync_pkt.payload.sync_hand.has_melded = players[p_idx].has_melded;
+                memcpy(sync_pkt.payload.sync_hand.private_board, boards[p_idx], sizeof(Tile) * 2 * 15);
+                net_send_packet(room->client_sockets[p_idx], &sync_pkt);
+            }
+            // Broadast game state
+            server_broadcast_sync(room, *current_player, table, deck);
+        }
+    } else if (packet->type == REQ_DISCARD_TILE) {
+        int p_idx = packet->sender_id;
+        if (p_idx >= 0 && p_idx < room->player_count && *current_player == p_idx && (players[p_idx].drew_deck_this_turn || players[p_idx].drew_from_discard_this_turn)) {
+            int idx = packet->payload.req_action.hand_index;
+            int r = idx / 15; int c = idx % 15;
+            if (boards[p_idx][r][c].id != -1) {
+                discard_tile_from_board(p_idx, &players[p_idx], r, c);
+                
+                players[p_idx].drew_deck_this_turn = false;
+                players[p_idx].drew_from_discard_this_turn = false;
+                *current_player = (*current_player + 1) % room->player_count;
+                
+                if (room->client_sockets[p_idx] >= 0) {
+                    NetPacket sync_pkt;
+                    memset(&sync_pkt, 0, sizeof(NetPacket));
+                    sync_pkt.type = SYNC_PRIVATE_HAND;
+                    sync_pkt.sender_id = 0;
+                    sync_pkt.payload.sync_hand.tile_count = players[p_idx].tile_count;
+                    sync_pkt.payload.sync_hand.has_melded = players[p_idx].has_melded;
+                    memcpy(sync_pkt.payload.sync_hand.private_board, boards[p_idx], sizeof(Tile) * 2 * 15);
+                    net_send_packet(room->client_sockets[p_idx], &sync_pkt);
+                }
+                server_broadcast_sync(room, *current_player, table, deck);
+            }
+        }
+    } else if (packet->type == REQ_PLAY_MELDS) {
+        int p_idx = packet->sender_id;
+        if (p_idx >= 0 && p_idx < room->player_count && *current_player == p_idx) {
+            // Populate global selected_tiles array for the old validation function
+            for (int r = 0; r < 2; r++) {
+                for (int c = 0; c < 15; c++) selected_tiles[p_idx][r][c] = 0;
+            }
+            int count = packet->payload.req_play.count;
+            for (int i = 0; i < count; i++) {
+                int idx = packet->payload.req_play.hand_indices[i];
+                int r = idx / 15; int c = idx % 15;
+                selected_tiles[p_idx][r][c] = i + 1;
+            }
+            
+            // clear global error just in case
+            global_has_error = false;
+            
+            int res = play_selected_meld(p_idx, &players[p_idx], table);
+            
+            if (res >= 0) {
+                // Success! Sync hand and board!
+                if (room->client_sockets[p_idx] >= 0) {
+                    NetPacket sync_pkt;
+                    memset(&sync_pkt, 0, sizeof(NetPacket));
+                    sync_pkt.type = SYNC_PRIVATE_HAND;
+                    sync_pkt.sender_id = 0;
+                    sync_pkt.payload.sync_hand.tile_count = players[p_idx].tile_count;
+                    sync_pkt.payload.sync_hand.has_melded = players[p_idx].has_melded;
+                    memcpy(sync_pkt.payload.sync_hand.private_board, boards[p_idx], sizeof(Tile) * 2 * 15);
+                    net_send_packet(room->client_sockets[p_idx], &sync_pkt);
+                }
+                server_broadcast_sync(room, *current_player, table, deck);
+            } else if (global_has_error) {
+                // Eroare declansata (ex: formatie invalida). Trimitem MSG_ALERT inapoi la client
+                if (room->client_sockets[p_idx] >= 0) {
+                    NetPacket alert_pkt;
+                    memset(&alert_pkt, 0, sizeof(NetPacket));
+                    alert_pkt.type = SYNC_MSG_ALERT;
+                    alert_pkt.sender_id = 0;
+                    strncpy(alert_pkt.payload.sync_msg, global_error_msg, sizeof(alert_pkt.payload.sync_msg) - 1);
+                    net_send_packet(room->client_sockets[p_idx], &alert_pkt);
+                }
+            }
+            
+            // Clear selected_tiles
+            for (int r = 0; r < 2; r++) {
+                for (int c = 0; c < 15; c++) selected_tiles[p_idx][r][c] = 0;
+            }
+        }
+    } else if (packet->type == REQ_ADD_LIPITURA) {
+        // Lipitura
+        int p_idx = packet->sender_id;
+        if (p_idx >= 0 && p_idx < room->player_count && *current_player == p_idx) {
+            int hand_idx = packet->payload.req_lipitura.hand_index;
+            int meld_idx = packet->payload.req_lipitura.table_meld_index;
+            int side = packet->payload.req_lipitura.side;
+            if (hand_idx >= 0 && hand_idx < players[p_idx].tile_count && meld_idx >= 0 && meld_idx < table->meld_count) {
+                Tile tile = players[p_idx].hand[hand_idx];
+                if (!players[p_idx].has_melded) {
+                    NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
+                    alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Trebuie sa te etalezi!");
+                    net_send_packet(room->client_sockets[p_idx], &alert_pkt);
+                } else if (players[p_idx].drew_from_discard_this_turn && tile.id == players[p_idx].primary_discard_drawn_tile.id) {
+                    NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
+                    alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Nu poti lipi piesa din decartate!");
+                    net_send_packet(room->client_sockets[p_idx], &alert_pkt);
+                } else if (can_attach_tile_to_side(&table->melds[meld_idx], tile, side)) {
+                    if (attach_tile_to_meld_side(table, meld_idx, tile, side, p_idx)) {
+                        int indices[1] = {hand_idx};
+                        remove_tiles_from_hand(&players[p_idx], indices, 1);
+                        init_boards_from_players(players, room->player_count);
+                        for (int i = 0; i < room->player_count; i++) {
+                            if (room->client_sockets[i] >= 0) {
+                                NetPacket sync_b; memset(&sync_b, 0, sizeof(NetPacket));
+                                sync_b.type = SYNC_PUBLIC_BOARD; sync_b.payload.sync_board.table = *table;
+                                sync_b.payload.sync_board.discard_count = discard_count;
+                                for (int d = 0; d < discard_count; d++) sync_b.payload.sync_board.discard_pile[d] = discard_pile[d];
+                                sync_b.payload.sync_board.remaining_deck_cards = deck->size;
+                                net_send_packet(room->client_sockets[i], &sync_b);
 
-    time_t elapsed = time(NULL) - action_start_time;
-    int remaining = action_time_limit - (int)elapsed;
-    if (remaining < 0) remaining = 0;
-    if (remaining > action_time_limit) remaining = action_time_limit;
+                                NetPacket sync_h; memset(&sync_h, 0, sizeof(NetPacket));
+                                sync_h.type = SYNC_PRIVATE_HAND; sync_h.sender_id = 0;
+                                sync_h.payload.sync_hand.tile_count = players[i].tile_count;
+                                sync_h.payload.sync_hand.has_melded = players[i].has_melded;
+                                memcpy(sync_h.payload.sync_hand.private_board, boards[i], sizeof(Tile) * 2 * 15);
+                                net_send_packet(room->client_sockets[i], &sync_h);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if (packet->type == REQ_REPLACE_JOKER) {
+        int p_idx = packet->sender_id;
+        if (p_idx >= 0 && p_idx < room->player_count && *current_player == p_idx) {
+            int hand_idx = packet->payload.req_replace_joker.hand_index;
+            int meld_idx = packet->payload.req_replace_joker.table_meld_index;
+            if (hand_idx >= 0 && hand_idx < players[p_idx].tile_count && meld_idx >= 0 && meld_idx < table->meld_count) {
+                Tile tile = players[p_idx].hand[hand_idx];
+                if (!players[p_idx].has_melded) {
+                    NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
+                    alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Trebuie sa te etalezi intai!");
+                    net_send_packet(room->client_sockets[p_idx], &alert_pkt);
+                } else if (players[p_idx].drew_from_discard_this_turn && tile.id == players[p_idx].primary_discard_drawn_tile.id) {
+                    NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
+                    alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Nu poti folosi piesa decartata!");
+                    net_send_packet(room->client_sockets[p_idx], &alert_pkt);
+                } else {
+                    int joker_idx = -1;
+                    if (can_replace_joker(&table->melds[meld_idx], tile, &joker_idx)) {
+                        Tile joker_tile = table->melds[meld_idx].tiles[joker_idx];
+                        joker_tile.number = 0; joker_tile.color = JOKER_COLOR; joker_tile.points = 50;
+                        table->melds[meld_idx].tiles[joker_idx] = tile;
+                        table->melds[meld_idx].face_down[joker_idx] = true;
+                        table->melds[meld_idx].tile_owner[joker_idx] = p_idx;
+                        if (is_valid_run(table->melds[meld_idx].tiles, table->melds[meld_idx].count)) {
+                            sort_run_with_flags(table->melds[meld_idx].tiles, table->melds[meld_idx].face_down, table->melds[meld_idx].tile_owner, table->melds[meld_idx].count);
+                        }
+                        players[p_idx].hand[hand_idx] = joker_tile;
+                        players[p_idx].pending_jokers_to_place_face_down++;
+                        init_boards_from_players(players, room->player_count);
+                        for (int i = 0; i < room->player_count; i++) {
+                            if (room->client_sockets[i] >= 0) {
+                                NetPacket sync_b; memset(&sync_b, 0, sizeof(NetPacket));
+                                sync_b.type = SYNC_PUBLIC_BOARD; sync_b.payload.sync_board.table = *table;
+                                sync_b.payload.sync_board.discard_count = discard_count;
+                                for (int d = 0; d < discard_count; d++) sync_b.payload.sync_board.discard_pile[d] = discard_pile[d];
+                                sync_b.payload.sync_board.remaining_deck_cards = deck->size;
+                                net_send_packet(room->client_sockets[i], &sync_b);
 
-    char gs_buf[NET_BUFFER_SIZE];
-    uint32_t gs_len;
-    net_serialize_game_state(players, player_count, table, deck, discard_pile, discard_count,
-                             current_player, global_turn_number, atuu_tile, initial_atu_owner,
-                             (int)state, atu_taken, first_discard_tile_id,
-                             remaining, action_time_limit, deck_pile_sizes, swap_pending,
-                             global_has_error, global_error_msg,
-                             gs_buf, &gs_len);
-    net_broadcast(&g_room, MSG_GAME_STATE, gs_buf, gs_len);
-
-    for (int i = 1; i < player_count; i++) {
-        if (g_room.players[i].connected && g_room.client_sockets[i] >= 0) {
-            char hand_buf[NET_BUFFER_SIZE];
-            uint32_t hand_len;
-            net_serialize_hand(&players[i], i, boards[i], hand_buf, &hand_len);
-            net_send_message(g_room.client_sockets[i], MSG_HAND_UPDATE, hand_buf, hand_len);
+                                NetPacket sync_h; memset(&sync_h, 0, sizeof(NetPacket));
+                                sync_h.type = SYNC_PRIVATE_HAND; sync_h.sender_id = 0;
+                                sync_h.payload.sync_hand.tile_count = players[i].tile_count;
+                                sync_h.payload.sync_hand.has_melded = players[i].has_melded;
+                                memcpy(sync_h.payload.sync_hand.private_board, boards[i], sizeof(Tile) * 2 * 15);
+                                net_send_packet(room->client_sockets[i], &sync_h);
+                            }
+                        }
+                    } else {
+                        NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
+                        alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Nu poti inlocui jokerul cu piesa asta!");
+                        net_send_packet(room->client_sockets[p_idx], &alert_pkt);
+                    }
+                }
+            }
         }
     }
 }
@@ -2656,22 +2574,136 @@ round_start:
         }
     }
 
-    int cursor_r = 0;
-    int cursor_c = 0;
     
     if (g_is_networked && g_room.is_host) {
-        host_broadcast_game_state(players, &table, &deck);
+        server_broadcast_sync(&g_room, current_player, &table, &deck);
     }
-    state = STATE_PLAY;
+    // Faza 3 Dumb Client Network Loop
+    LocalClientState current_state = {0};
+    current_state.local_player_id = g_local_player_index;
+    current_state.phase = PHASE_DRAW;
+    current_state.active_player_id = 0;
+    current_state.deck_remaining = deck.size;
+    current_state.discard_count = 0;
+    
+    // Copy initially dealt board into current_state for the local player (host usually has it)
+    for(int r=0; r<2; r++){
+        for(int c=0; c<15; c++){
+            current_state.private_board[r][c] = boards[g_local_player_index][r][c];
+        }
+    }
+    
+    g_ui_state.cursor_zone = ZONE_HAND;
+    g_ui_state.cursor_x = 0;
+    g_ui_state.cursor_y = 0;
+
     int running = 1;
-    int quit_mode = 0; // 0 = none, 1 = pending y/n
-    int debug_progress = 0;
+    halfdelay(1); // 100ms non-blocking input
 
-    // Movement state
-    is_holding = false;
-    held_r = -1;
-    held_c = -1;
+    while (running) {
+        // --- 1. SERVER POLLING (Only if Host) ---
+        if (g_is_networked && g_room.is_host) {
+            for (int i = 1; i < player_count; i++) {
+                if (g_room.client_sockets[i] >= 0 && net_has_data(g_room.client_sockets[i])) {
+                    NetPacket packet;
+                    if (net_receive_packet(g_room.client_sockets[i], &packet)) {
+                        server_process_packet(&g_room, &packet, players, boards, &table, &deck, &current_player);
+                    }
+                }
+            }
+        }
 
+        // --- 2. CLIENT POLLING (Both Host and Clients read SYNC packets) ---
+        if (g_is_networked) {
+            // Un client normal are doar host_socket-ul spre server
+            int sock_to_read = g_room.is_host ? -1 : g_room.host_socket;
+            
+            if (sock_to_read >= 0 && net_has_data(sock_to_read)) {
+                NetPacket packet;
+                if (net_receive_packet(sock_to_read, &packet)) {
+                    if (packet.type == SYNC_PRIVATE_HAND) {
+                        for(int r=0; r<2; r++){
+                            for(int c=0; c<15; c++){
+                                current_state.private_board[r][c] = packet.payload.sync_hand.private_board[r][c];
+                            }
+                        }
+                    } else if (packet.type == SYNC_GAME_STATE) {
+                        current_state.active_player_id = packet.payload.sync_state.active_player_id;
+                        current_state.phase = packet.payload.sync_state.current_phase;
+                    } else if (packet.type == SYNC_PUBLIC_BOARD) {
+                        current_state.discard_count = packet.payload.sync_board.discard_count;
+                        current_state.deck_remaining = packet.payload.sync_board.remaining_deck_cards;
+                        for(int j=0; j<packet.payload.sync_board.discard_count; j++) {
+                            current_state.discard_pile[j] = packet.payload.sync_board.discard_pile[j];
+                        }
+                        current_state.table = packet.payload.sync_board.table;
+                    } else if (packet.type == SYNC_MSG_ALERT) {
+                        set_error(packet.payload.sync_msg);
+                    }
+                }
+            }
+        }
+
+        // --- 3. UI RENDERING ---
+        render_frame(&current_state, &g_ui_state);
+
+        // --- 4. INPUT HANDLING ---
+        int ch = getch();
+        if (ch == 'q' || ch == 'Q') {
+            running = 0;
+            break;
+        }
+
+        if (ch != ERR) {
+            NetPacket out_pkt;
+            out_pkt.type = 0; // Invalid
+            
+            handle_client_input(ch, &current_state, &g_ui_state, &out_pkt);
+            
+            // Daca input-ul a generat un pachet de actiune (ex: am apasat Z ca sa fac Swap)
+            if (out_pkt.type != 0) {
+                if (g_is_networked) {
+                    if (g_room.is_host) {
+                        // Host-ul randeaza propriul sau pachet intern, fara sa-l trimita pe socket
+                        server_process_packet(&g_room, &out_pkt, players, boards, &table, &deck, &current_player);
+                        // Apoi imediat se sincronizeaza local pe sine!
+                        for(int r=0; r<2; r++){
+                            for(int c=0; c<15; c++){
+                                current_state.private_board[r][c] = boards[g_local_player_index][r][c];
+                            }
+                        }
+                        current_state.active_player_id = current_player;
+                        current_state.discard_count = discard_count;
+                        current_state.deck_remaining = deck.size;
+                        for(int j=0; j<discard_count; j++) {
+                            current_state.discard_pile[j] = discard_pile[j];
+                        }
+                        current_state.table = table;
+                    } else {
+                        // Clientii expediaza pe socket
+                        net_send_packet(g_room.host_socket, &out_pkt);
+                    }
+                } else {
+                    // Offline fallback (Test Optimistic)
+                    if (out_pkt.type == REQ_SWAP_TILES) {
+                        int r1 = out_pkt.payload.req_swap.index1 / 15;
+                        int c1 = out_pkt.payload.req_swap.index1 % 15;
+                        int r2 = out_pkt.payload.req_swap.index2 / 15;
+                        int c2 = out_pkt.payload.req_swap.index2 % 15;
+                        Tile tmp = current_state.private_board[r1][c1];
+                        current_state.private_board[r1][c1] = current_state.private_board[r2][c2];
+                        current_state.private_board[r2][c2] = tmp;
+                    }
+                }
+            }
+        }
+    } // End of Faza 3 Dumb Client Loop
+    
+    endwin();
+    printf("\nServer shutdown.\n");
+    return 0;
+
+#if 0
     // Discard viewport selection
     selecting_discard = false;
     discard_cursor = 0;
@@ -2688,6 +2720,7 @@ round_start:
     action_start_time = time(NULL);
     action_time_limit = 60;
 
+#if 0
     if (g_is_networked && !g_room.is_host) {
         // Wait for the host to send the initial game state and local hand
         bool initial_state_received = false;
@@ -2731,9 +2764,11 @@ round_start:
         }
         halfdelay(1); // Restore non-blocking mode
     }
+#endif
 
     int ch = ERR;
     while (running) {
+#if 0
         if (g_is_networked) {
             if (g_room.is_host) {
                 // Host checks for messages from clients
@@ -2828,6 +2863,7 @@ round_start:
                 }
             }
         }
+#endif
         int interact_p = g_is_networked ? g_local_player_index : current_player;
         if (global_has_error) {
             struct timeval now;
@@ -4372,6 +4408,7 @@ round_start:
             }
         }
     }
+#endif
 
     endwin();
     return 0;

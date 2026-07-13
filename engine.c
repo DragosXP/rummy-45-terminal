@@ -305,11 +305,27 @@ void sort_run(Tile tiles[], int count) {
     }
     
     bool ace_high = (has_one && has_thirteen);
-    int sort_vals[14];
+    int sort_vals[15];
+    int ones_count = 0;
+    for (int i = 0; i < count; i++) {
+        if (tiles[i].number == 1) ones_count++;
+    }
+    bool high_ace_used = false;
     
     for (int i = 0; i < count; i++) {
         if (tiles[i].number == 0) sort_vals[i] = -1;
-        else if (tiles[i].number == 1 && ace_high) sort_vals[i] = 14;
+        else if (tiles[i].number == 1 && ace_high) {
+            if (ones_count >= 2) {
+                if (!high_ace_used) {
+                    sort_vals[i] = 14;
+                    high_ace_used = true;
+                } else {
+                    sort_vals[i] = 1;
+                }
+            } else {
+                sort_vals[i] = 14;
+            }
+        }
         else sort_vals[i] = tiles[i].number;
     }
     
@@ -371,11 +387,27 @@ void sort_run_with_flags(Tile tiles[], bool face_down[], int tile_owner[], int c
     }
     
     bool ace_high = (has_one && has_thirteen);
-    int sort_vals[14];
+    int sort_vals[15];
+    int ones_count = 0;
+    for (int i = 0; i < count; i++) {
+        if (tiles[i].number == 1) ones_count++;
+    }
+    bool high_ace_used = false;
     
     for (int i = 0; i < count; i++) {
         if (tiles[i].number == 0) sort_vals[i] = -1;
-        else if (tiles[i].number == 1 && ace_high) sort_vals[i] = 14;
+        else if (tiles[i].number == 1 && ace_high) {
+            if (ones_count >= 2) {
+                if (!high_ace_used) {
+                    sort_vals[i] = 14;
+                    high_ace_used = true;
+                } else {
+                    sort_vals[i] = 1;
+                }
+            } else {
+                sort_vals[i] = 14;
+            }
+        }
         else sort_vals[i] = tiles[i].number;
     }
     
@@ -534,7 +566,7 @@ int calculate_meld_points(Tile tiles[], int count) {
 
         int total = 0;
         for (int i = 0; i < count; i++) {
-            if (resolved[i] == 1) total += 25;
+            if (resolved[i] == 1 || resolved[i] == 14) total += 25;
             else if (resolved[i] >= 10) total += 10;
             else total += 5;
         }
@@ -690,6 +722,18 @@ bool attempt_auto_meld_from_discard(Player *player, Table *table, int player_idx
     int num_splits = split_unordered_melds(temp_hand, temp_count, split_melds);
     
     if (num_splits > 0 && check_initial_melds(split_melds, num_splits)) {
+        bool candidate_used = false;
+        for (int m = 0; m < num_splits; m++) {
+            for (int t = 0; t < split_melds[m].count; t++) {
+                if (split_melds[m].tiles[t].id == candidate.id) {
+                    candidate_used = true;
+                    break;
+                }
+            }
+            if (candidate_used) break;
+        }
+        if (!candidate_used) return false;
+
         discard_count--;
         player->hand[player->tile_count] = candidate;
         player->tile_count++;
@@ -776,7 +820,7 @@ void partition_unordered_recursive(Tile pool[], int pool_size, Meld current_part
         for (int i = 0; i < pool_size; i++) {
             if (mask & (1 << i)) len++;
         }
-        if (len < 3) continue;
+        if (len < 3 || len > 14) continue;
 
         Tile subset[15];
         int s_idx = 0;
@@ -799,7 +843,7 @@ void partition_unordered_recursive(Tile pool[], int pool_size, Meld current_part
                 current_partition[partition_size].face_down[i] = false;
             }
             
-            Tile new_pool[15];
+            Tile new_pool[21];
             int n_idx = 0;
             for (int i = 0; i < pool_size; i++) {
                 if (!(mask & (1 << i))) new_pool[n_idx++] = pool[i];
