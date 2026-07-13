@@ -2327,6 +2327,23 @@ void execute_network_action(NetAction *action, int client_idx, Player players[],
             }
             break;
         }
+        case ACTION_MOVE_TILE: {
+            int from_r = action->param1;
+            int from_c = action->param2;
+            int to_r = action->param3;
+            int to_c = action->param4;
+            
+            Tile temp = boards[client_idx][to_r][to_c];
+            boards[client_idx][to_r][to_c] = boards[client_idx][from_r][from_c];
+            boards[client_idx][from_r][from_c] = temp;
+            
+            bool temp_sel = selected_tiles[client_idx][to_r][to_c];
+            selected_tiles[client_idx][to_r][to_c] = selected_tiles[client_idx][from_r][from_c];
+            selected_tiles[client_idx][from_r][from_c] = temp_sel;
+            
+            sync_board_to_player(client_idx, active);
+            break;
+        }
         case ACTION_MELD: {
             for (int r = 0; r < 2; r++) {
                 for (int c = 0; c < 15; c++) {
@@ -2908,8 +2925,8 @@ round_start:
                 snprintf(log_msg, sizeof(log_msg), "Tura %d. Jucator curent: %d (Timeout)", global_turn_number, current_player + 1);
                 log_event(log_msg);
                 
-                cursor_r = saved_board_r[interact_p];
-                cursor_c = saved_board_c[interact_p];
+                if (!g_is_networked) { cursor_r = saved_board_r[interact_p]; cursor_c = saved_board_c[interact_p]; }
+                
                 state = STATE_DRAW;
                 select_deck = true;
                 meld_selection_mode = false;
@@ -3044,6 +3061,8 @@ round_start:
                         selected_tiles[g_local_player_index][cursor_r][cursor_c] = selected_tiles[g_local_player_index][held_r][held_c];
                         selected_tiles[g_local_player_index][held_r][held_c] = temp_sel;
 
+                        client_send_action_struct(ACTION_MOVE_TILE, held_r, held_c, cursor_r, cursor_c);
+
                         is_holding = false;
                         held_r = -1;
                         held_c = -1;
@@ -3115,6 +3134,8 @@ round_start:
                                 bool temp_sel = selected_tiles[g_local_player_index][cursor_r][cursor_c];
                                 selected_tiles[g_local_player_index][cursor_r][cursor_c] = selected_tiles[g_local_player_index][held_r][held_c];
                                 selected_tiles[g_local_player_index][held_r][held_c] = temp_sel;
+
+                                client_send_action_struct(ACTION_MOVE_TILE, held_r, held_c, cursor_r, cursor_c);
 
                                 is_holding = false;
                                 held_r = -1;
@@ -3432,8 +3453,8 @@ round_start:
                             }
                         }
                         if (cursor_r == -1) {
-                            cursor_r = saved_board_r[interact_p];
-                            cursor_c = saved_board_c[interact_p];
+                            if (!g_is_networked) { cursor_r = saved_board_r[interact_p]; cursor_c = saved_board_c[interact_p]; }
+                            
                         }
                     } else {
                         if (is_holding) {
@@ -3482,13 +3503,13 @@ round_start:
                         selecting_atu = false;
                         select_deck = false;
                         cursor_on_board_during_draw = true;
-                        cursor_r = saved_board_r[interact_p];
-                        cursor_c = saved_board_c[interact_p];
+                        if (!g_is_networked) { cursor_r = saved_board_r[interact_p]; cursor_c = saved_board_c[interact_p]; }
+                        
                     } else if (select_deck) {
                         saved_select_deck[interact_p] = select_deck; // true
                         cursor_on_board_during_draw = true;
-                        cursor_r = saved_board_r[interact_p];
-                        cursor_c = saved_board_c[interact_p];
+                        if (!g_is_networked) { cursor_r = saved_board_r[interact_p]; cursor_c = saved_board_c[interact_p]; }
+                        
                     } else {
                         select_deck = true;
                         saved_select_deck[interact_p] = true;
@@ -3734,8 +3755,8 @@ round_start:
                                 }
                             } else {
                                 // Down from Discard Pile goes to private board
-                                cursor_r = saved_board_r[interact_p];
-                                cursor_c = saved_board_c[interact_p];
+                                if (!g_is_networked) { cursor_r = saved_board_r[interact_p]; cursor_c = saved_board_c[interact_p]; }
+                                
                             }
                         } else {
                             if (cursor_c < 14) {
@@ -3748,12 +3769,12 @@ round_start:
                                     }
                                     cursor_c = target_col;
                                 } else {
-                                    cursor_r = saved_board_r[interact_p];
-                                    cursor_c = saved_board_c[interact_p];
+                                    if (!g_is_networked) { cursor_r = saved_board_r[interact_p]; cursor_c = saved_board_c[interact_p]; }
+                                    
                                 }
                             } else {
-                                cursor_r = saved_board_r[interact_p];
-                                cursor_c = saved_board_c[interact_p];
+                                if (!g_is_networked) { cursor_r = saved_board_r[interact_p]; cursor_c = saved_board_c[interact_p]; }
+                                
                             }
                         }
                     } else if (cursor_r == 0) {
@@ -3834,8 +3855,8 @@ round_start:
                                         selected_tiles[interact_p][sel_r][sel_c] = 0;
                                         sync_board_to_player(interact_p, active);
 
-                                        cursor_r = saved_board_r[interact_p];
-                                        cursor_c = saved_board_c[interact_p];
+                                        if (!g_is_networked) { cursor_r = saved_board_r[interact_p]; cursor_c = saved_board_c[interact_p]; }
+                                        
                                         action_start_time = time(NULL);
                                         action_time_limit = 25;
                                         mvprintw(38, 5, "Lipitură reușită!                               ");
@@ -3861,8 +3882,8 @@ round_start:
                                     refresh();
                                     napms(1200);
                                     mvprintw(38, 5, "                                                                        ");
-                                    cursor_r = saved_board_r[interact_p];
-                                    cursor_c = saved_board_c[interact_p];
+                                    if (!g_is_networked) { cursor_r = saved_board_r[interact_p]; cursor_c = saved_board_c[interact_p]; }
+                                    
                                     
                                     // Victorie automată
                                     if (active->tile_count == 1) {
@@ -3921,8 +3942,8 @@ round_start:
                         }
                     }
                     if (cursor_r == -1) {
-                        cursor_r = saved_board_r[interact_p];
-                        cursor_c = saved_board_c[interact_p];
+                        if (!g_is_networked) { cursor_r = saved_board_r[interact_p]; cursor_c = saved_board_c[interact_p]; }
+                        
                     }
                 } else if (ch == 'c' || ch == 'C') {
                     // C switches back to movement mode and cancels all selections
@@ -3933,8 +3954,8 @@ round_start:
                         }
                     }
                     if (cursor_r == -1) {
-                        cursor_r = saved_board_r[interact_p];
-                        cursor_c = saved_board_c[interact_p];
+                        if (!g_is_networked) { cursor_r = saved_board_r[interact_p]; cursor_c = saved_board_c[interact_p]; }
+                        
                     }
                 }
             } else {
@@ -4165,8 +4186,8 @@ round_start:
                                      char log_msg[128];
                                      snprintf(log_msg, sizeof(log_msg), "Tura %d. Jucator curent: %d", global_turn_number, current_player + 1);
                                      log_event(log_msg);
-                                     cursor_r = saved_board_r[interact_p];
-                                     cursor_c = saved_board_c[interact_p];
+                                     if (!g_is_networked) { cursor_r = saved_board_r[interact_p]; cursor_c = saved_board_c[interact_p]; }
+                                     
                                      state = STATE_DRAW;
                                      select_deck = true;
                                      meld_selection_mode = false;
@@ -4239,8 +4260,8 @@ round_start:
                                         is_holding = false;
                                         held_r = -1;
                                         held_c = -1;
-                                        cursor_r = saved_board_r[interact_p];
-                                        cursor_c = saved_board_c[interact_p];
+                                        if (!g_is_networked) { cursor_r = saved_board_r[interact_p]; cursor_c = saved_board_c[interact_p]; }
+                                        
                                         action_start_time = time(NULL);
                                         action_time_limit = 25;
                                         mvprintw(38, 5, "Lipitură reușită!                               ");
