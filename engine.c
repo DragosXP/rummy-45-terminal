@@ -534,7 +534,8 @@ int calculate_meld_points(Tile tiles[], int count) {
 
         int total = 0;
         for (int i = 0; i < count; i++) {
-            if (resolved[i] >= 10) total += 10;
+            if (resolved[i] == 1) total += 25;
+            else if (resolved[i] >= 10) total += 10;
             else total += 5;
         }
         return total;
@@ -550,29 +551,27 @@ bool check_initial_meld(Tile tiles[], int count) {
 
 bool check_initial_melds(Meld staged[], int meld_count) {
     int total = 0;
-    bool has_run = false;
-    bool has_terta_1 = false;
+    bool has_clean_run = false;
 
     for (int m = 0; m < meld_count; m++) {
         if (!is_valid_meld(staged[m].tiles, staged[m].count)) return false;
+        
         if (is_valid_run(staged[m].tiles, staged[m].count)) {
-            has_run = true;
-        }
-        if (is_valid_group(staged[m].tiles, staged[m].count)) {
-            int val = -1;
+            bool has_joker = false;
             for (int i = 0; i < staged[m].count; i++) {
-                if (staged[m].tiles[i].number != 0) {
-                    val = staged[m].tiles[i].number;
+                if (staged[m].tiles[i].number == 0) {
+                    has_joker = true;
                     break;
                 }
             }
-            if (val == 1) {
-                has_terta_1 = true;
+            if (!has_joker) {
+                has_clean_run = true;
             }
         }
+        
         total += calculate_meld_points(staged[m].tiles, staged[m].count);
     }
-    return (total >= 45 && (has_run || has_terta_1));
+    return (total >= 45 && has_clean_run);
 }
 
 bool has_player_won(Player *player) {

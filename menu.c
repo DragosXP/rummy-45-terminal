@@ -365,6 +365,7 @@ bool show_create_room_lobby(RoomState *room, AccountFile *af, const char *host_u
     }
     
     // Generam cod alfanumeric de 6 caractere (litere mari si cifre)
+    srand(time(NULL));
     const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     for (int i = 0; i < 6; i++) {
         room->room_code[i] = charset[rand() % 36];
