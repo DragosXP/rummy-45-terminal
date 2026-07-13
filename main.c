@@ -315,6 +315,15 @@ void sync_board_to_player(int player_idx, Player *player) {
             }
         }
     }
+
+    if (g_is_networked && !g_room.is_host && player_idx == g_local_player_index) {
+        char hand_buf[NET_BUFFER_SIZE];
+        uint32_t hand_len;
+        net_serialize_hand(player, player_idx, boards[player_idx], hand_buf, &hand_len);
+        if (g_room.host_socket >= 0) {
+            net_send_message(g_room.host_socket, MSG_HAND_UPDATE, hand_buf, hand_len);
+        }
+    }
 }
 
 // Populates a tile into the first empty slot on the player's board
@@ -400,10 +409,14 @@ void draw_header(Player players[], int current_player, GameState state) {
             mvprintw(0, col_offsets[i], "%s", header_str);
             mvprintw(1, col_offsets[i], "%s", bar_str);
             
-            if (state == STATE_DRAW) {
-                mvprintw(37, 5, "Este rândul tău, %s. Acțiune: Trage o piesă (de jos sau din decartate).", players[i].username);
+            if (i == g_local_player_index) {
+                if (state == STATE_DRAW) {
+                    mvprintw(37, 5, "Este rândul tău, %s. Acțiune: Trage o piesă (de jos sau din decartate).                ", players[i].username);
+                } else {
+                    mvprintw(37, 5, "Este rândul tău, %s. Acțiune: Etalează, lipește sau decartează pentru a încheia tura.  ", players[i].username);
+                }
             } else {
-                mvprintw(37, 5, "Este rândul tău, %s. Acțiune: Etalează, lipește sau decartează pentru a încheia tura.", players[i].username);
+                mvprintw(37, 5, "Este rândul lui %s, așteaptă-ți rândul...                                              ", players[i].username);
             }
             attroff(COLOR_PAIR(7) | A_BOLD);
         } else {
@@ -2625,6 +2638,9 @@ round_start:
                                 g_room.client_sockets[i] = -1;
                                 set_error("Un jucator s-a deconectat!");
                                 host_broadcast_game_state(players, &table, &deck);
+                            } else if (type == MSG_HAND_UPDATE) {
+                                int dummy_idx;
+                                net_deserialize_hand(buffer, recv_len, &players[i], &dummy_idx, boards[i]);
                             }
                         }
                     }
