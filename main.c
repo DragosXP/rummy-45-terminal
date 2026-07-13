@@ -2060,7 +2060,6 @@ void open_debug_menu(Player players[], Table *table, Deck *deck, int current_pla
 // ===== Network multiplayer support functions =====
 void client_send_action(NetMessageType type, const void *data, uint32_t len); // forward decl
 void host_broadcast_game_state(Player players[], Table *table, Deck *deck);
-void send_board_sync_to_host(Player players[]);
 
 void client_send_action_struct(NetActionType action_type, int param1, int param2, int param3, int param4) {
     if (!g_is_networked || g_room.is_host) return;
@@ -2353,11 +2352,18 @@ void execute_network_action(NetAction *action, int client_idx, Player players[],
 void host_broadcast_game_state(Player players[], Table *table, Deck *deck) {
     if (!g_is_networked || !g_room.is_host) return;
 
+    time_t elapsed = time(NULL) - action_start_time;
+    int remaining = action_time_limit - (int)elapsed;
+    if (remaining < 0) remaining = 0;
+    if (remaining > action_time_limit) remaining = action_time_limit;
+
     char gs_buf[NET_BUFFER_SIZE];
     uint32_t gs_len;
     net_serialize_game_state(players, player_count, table, deck, discard_pile, discard_count,
                              current_player, global_turn_number, atuu_tile, initial_atu_owner,
                              (int)state, atu_taken, first_discard_tile_id,
+                             remaining, action_time_limit, deck_pile_sizes, swap_pending,
+                             global_has_error, global_error_msg,
                              gs_buf, &gs_len);
     net_broadcast(&g_room, MSG_GAME_STATE, gs_buf, gs_len);
 
@@ -2369,14 +2375,6 @@ void host_broadcast_game_state(Player players[], Table *table, Deck *deck) {
             net_send_message(g_room.client_sockets[i], MSG_HAND_UPDATE, hand_buf, hand_len);
         }
     }
-}
-
-void send_board_sync_to_host(Player players[]) {
-    if (!g_is_networked || g_room.is_host) return;
-    char hand_buf[NET_BUFFER_SIZE];
-    uint32_t hand_len;
-    net_serialize_hand(&players[g_local_player_index], g_local_player_index, boards[g_local_player_index], hand_buf, &hand_len);
-    net_send_message(g_room.host_socket, MSG_HAND_UPDATE, hand_buf, hand_len);
 }
 
 int main() {
@@ -2572,15 +2570,27 @@ round_start:
             if (net_receive_message(g_room.host_socket, &type, buffer, sizeof(buffer), &recv_len)) {
                 if (type == MSG_GAME_STATE) {
                     int rcv_state = (int)STATE_PLAY; bool rcv_atu = false; int rcv_first_disc = -1;
+                    int rcv_rem_time = 60; int rcv_time_limit = 60;
+                    bool rcv_has_error = false;
+                    char rcv_error_msg[128] = "";
                     net_deserialize_game_state(buffer, recv_len,
                                                players, &player_count, &table,
                                                &deck, discard_pile, &discard_count,
                                                &current_player, &global_turn_number, &atuu_tile,
                                                &initial_atu_owner,
-                                               &rcv_state, &rcv_atu, &rcv_first_disc);
+                                               &rcv_state, &rcv_atu, &rcv_first_disc,
+                                               &rcv_rem_time, &rcv_time_limit, deck_pile_sizes, swap_pending,
+                                               &rcv_has_error, rcv_error_msg);
                     state = (GameState)rcv_state;
                     atu_taken = rcv_atu;
                     first_discard_tile_id = rcv_first_disc;
+                    action_time_limit = rcv_time_limit;
+                    action_start_time = time(NULL) - (action_time_limit - rcv_rem_time);
+                    global_has_error = rcv_has_error;
+                    if (global_has_error) {
+                        strncpy(global_error_msg, rcv_error_msg, sizeof(global_error_msg) - 1);
+                        gettimeofday(&global_error_time, NULL);
+                    }
                     initial_state_received = true;
                 } else if (type == MSG_HAND_UPDATE) {
                     int p_idx;
@@ -2628,15 +2638,27 @@ round_start:
                     if (net_receive_message(g_room.host_socket, &type, buffer, sizeof(buffer), &recv_len)) {
                         if (type == MSG_GAME_STATE) {
                             int rcv_state = (int)STATE_PLAY; bool rcv_atu = false; int rcv_first_disc = -1;
+                            int rcv_rem_time = 60; int rcv_time_limit = 60;
+                            bool rcv_has_error = false;
+                            char rcv_error_msg[128] = "";
                             net_deserialize_game_state(buffer, recv_len,
                                                        players, &player_count, &table,
                                                        &deck, discard_pile, &discard_count,
                                                        &current_player, &global_turn_number, &atuu_tile,
                                                        &initial_atu_owner,
-                                                       &rcv_state, &rcv_atu, &rcv_first_disc);
+                                                       &rcv_state, &rcv_atu, &rcv_first_disc,
+                                                       &rcv_rem_time, &rcv_time_limit, deck_pile_sizes, swap_pending,
+                                                       &rcv_has_error, rcv_error_msg);
                             state = (GameState)rcv_state;
                             atu_taken = rcv_atu;
                             first_discard_tile_id = rcv_first_disc;
+                            action_time_limit = rcv_time_limit;
+                            action_start_time = time(NULL) - (action_time_limit - rcv_rem_time);
+                            global_has_error = rcv_has_error;
+                            if (global_has_error) {
+                                strncpy(global_error_msg, rcv_error_msg, sizeof(global_error_msg) - 1);
+                                gettimeofday(&global_error_time, NULL);
+                            }
                         } else if (type == MSG_HAND_UPDATE) {
                             int p_idx;
                             net_deserialize_hand(buffer, recv_len, &players[g_local_player_index], &p_idx, boards[g_local_player_index]);
@@ -2843,37 +2865,76 @@ round_start:
         refresh();
         ch = getch();
         bool is_my_turn = !g_is_networked || (current_player == g_local_player_index);
-        
-        if (g_is_networked && !g_room.is_host) {
-            if (ch == 'z' || ch == 'Z') {
-                if (!is_my_turn) {
-                    // Off-turn: only allow private board tile rearrangement
-                    if (state == STATE_PLAY && !meld_selection_mode && cursor_r >= 0) {
-                        // Handle hold/drop locally — purely cosmetic, no host notification
-                        if (!is_holding) {
-                            if (boards[interact_p][cursor_r][cursor_c].id != -1) {
-                                is_holding = true;
-                                held_r = cursor_r;
-                                held_c = cursor_c;
-                            }
-                        } else {
-                            Tile _t = boards[interact_p][cursor_r][cursor_c];
-                            boards[interact_p][cursor_r][cursor_c] = boards[interact_p][held_r][held_c];
-                            boards[interact_p][held_r][held_c] = _t;
-                            bool _ts = selected_tiles[interact_p][cursor_r][cursor_c];
-                            selected_tiles[interact_p][cursor_r][cursor_c] = selected_tiles[interact_p][held_r][held_c];
-                            selected_tiles[interact_p][held_r][held_c] = _ts;
-                            is_holding = false;
-                            held_r = -1;
-                            held_c = -1;
-                            // Sync to OUR player struct — not active (which is a different player)
-                            sync_board_to_player(interact_p, &players[interact_p]);
+
+        if (g_is_networked && !is_my_turn) {
+            // Force cursor to private board if it was outside
+            if (cursor_r < 0) {
+                cursor_r = 0;
+                cursor_c = 0;
+            }
+            if (ch == 'q' || ch == 'Q') {
+                quit_mode = 1;
+                debug_progress = 0;
+            } else if (quit_mode == 1) {
+                if (ch == 't' || ch == 'T') {
+                    running = 0;
+                } else if (ch != ERR) {
+                    quit_mode = 0;
+                }
+            } else if (ch == KEY_LEFT) {
+                if (cursor_r >= 0) {
+                    if (cursor_c > 0) cursor_c--;
+                    else cursor_c = 14;
+                }
+            } else if (ch == KEY_RIGHT) {
+                if (cursor_r >= 0) {
+                    if (cursor_c < 14) cursor_c++;
+                    else cursor_c = 0;
+                }
+            } else if (ch == KEY_UP) {
+                if (cursor_r == 1) {
+                    cursor_r = 0;
+                }
+            } else if (ch == KEY_DOWN) {
+                if (cursor_r == 0) {
+                    cursor_r = 1;
+                }
+            } else if (ch == 'z' || ch == 'Z') {
+                if (cursor_r >= 0) {
+                    if (!is_holding) {
+                        if (boards[g_local_player_index][cursor_r][cursor_c].id != -1) {
+                            is_holding = true;
+                            held_r = cursor_r;
+                            held_c = cursor_c;
                         }
                     } else {
-                        set_error("Nu este randul tau!");
+                        // Swap tiles locally
+                        Tile temp = boards[g_local_player_index][cursor_r][cursor_c];
+                        boards[g_local_player_index][cursor_r][cursor_c] = boards[g_local_player_index][held_r][held_c];
+                        boards[g_local_player_index][held_r][held_c] = temp;
+
+                        bool temp_sel = selected_tiles[g_local_player_index][cursor_r][cursor_c];
+                        selected_tiles[g_local_player_index][cursor_r][cursor_c] = selected_tiles[g_local_player_index][held_r][held_c];
+                        selected_tiles[g_local_player_index][held_r][held_c] = temp_sel;
+
+                        is_holding = false;
+                        held_r = -1;
+                        held_c = -1;
+                        sync_board_to_player(g_local_player_index, &players[g_local_player_index]);
                     }
-                    continue;
                 }
+            } else if (ch == 'x' || ch == 'X') {
+                if (is_holding) {
+                    is_holding = false;
+                    held_r = -1;
+                    held_c = -1;
+                }
+            }
+            continue; // Skip all regular game input processing!
+        }
+
+        if (g_is_networked && !g_room.is_host) {
+            if (ch == 'z' || ch == 'Z') {
                 if (state == STATE_DRAW) {
                     if (selecting_atu) {
                         client_send_action_struct(ACTION_DRAW_ATU, 0, 0, 0, 0);
@@ -2900,15 +2961,38 @@ round_start:
                             }
                         }
                     } else {
-                        if (meld_selection_mode && boards[g_local_player_index][cursor_r][cursor_c].id == -1) {
-                            client_send_action_struct(ACTION_MELD, 0, 0, 0, 0);
-                        } else {
-                            if (boards[g_local_player_index][cursor_r][cursor_c].id != -1) {
+                        if (meld_selection_mode) {
+                            if (boards[g_local_player_index][cursor_r][cursor_c].id == -1) {
+                                client_send_action_struct(ACTION_MELD, 0, 0, 0, 0);
+                            } else {
                                 if (selected_tiles[g_local_player_index][cursor_r][cursor_c] > 0) {
                                     selected_tiles[g_local_player_index][cursor_r][cursor_c] = 0;
                                 } else {
                                     selected_tiles[g_local_player_index][cursor_r][cursor_c] = ++selection_order_counter;
                                 }
+                            }
+                        } else {
+                            // Movement mode on private board: do local hold/swap
+                            if (!is_holding) {
+                                if (boards[g_local_player_index][cursor_r][cursor_c].id != -1) {
+                                    is_holding = true;
+                                    held_r = cursor_r;
+                                    held_c = cursor_c;
+                                }
+                            } else {
+                                // Swap tiles locally
+                                Tile temp = boards[g_local_player_index][cursor_r][cursor_c];
+                                boards[g_local_player_index][cursor_r][cursor_c] = boards[g_local_player_index][held_r][held_c];
+                                boards[g_local_player_index][held_r][held_c] = temp;
+
+                                bool temp_sel = selected_tiles[g_local_player_index][cursor_r][cursor_c];
+                                selected_tiles[g_local_player_index][cursor_r][cursor_c] = selected_tiles[g_local_player_index][held_r][held_c];
+                                selected_tiles[g_local_player_index][held_r][held_c] = temp_sel;
+
+                                is_holding = false;
+                                held_r = -1;
+                                held_c = -1;
+                                sync_board_to_player(g_local_player_index, &players[g_local_player_index]);
                             }
                         }
                     }

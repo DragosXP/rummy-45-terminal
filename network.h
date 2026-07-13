@@ -121,6 +121,9 @@ void net_serialize_game_state(Player players[], int player_count, Table *table,
                               int current_player, int turn_number, Tile atuu_tile,
                               int initial_atu_owner, int game_state, bool atu_taken,
                               int first_discard_tile_id,
+                              int remaining_time, int action_time_limit,
+                              const int deck_pile_sizes[], const bool swap_pending[],
+                              bool global_has_error, const char global_error_msg[],
                               void *buffer, uint32_t *len);
 
 void net_deserialize_game_state(const void *buffer, uint32_t len,
@@ -128,7 +131,10 @@ void net_deserialize_game_state(const void *buffer, uint32_t len,
                                 Deck *deck, Tile discard_pile[], int *discard_count,
                                 int *current_player, int *turn_number, Tile *atuu_tile,
                                 int *initial_atu_owner, int *game_state,
-                                bool *atu_taken, int *first_discard_tile_id);
+                                bool *atu_taken, int *first_discard_tile_id,
+                                int *remaining_time, int *action_time_limit,
+                                int deck_pile_sizes[], bool swap_pending[],
+                                bool *global_has_error, char global_error_msg[]);
 
 // Serializare hand update (doar mana unui jucator specific)
 void net_serialize_hand(Player *player, int player_idx, Tile board[2][15],

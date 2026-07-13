@@ -317,6 +317,9 @@ void net_serialize_game_state(Player players[], int p_count, Table *table,
                               int current_player, int turn_number, Tile atuu,
                               int atu_owner, int game_state, bool atu_taken_val,
                               int first_discard_id,
+                              int remaining_time, int action_time_limit,
+                              const int deck_pile_sizes[], const bool swap_pending[],
+                              bool global_has_error, const char global_error_msg[],
                               void *buffer, uint32_t *len) {
     char *buf = (char *)buffer;
     int offset = 0;
@@ -331,6 +334,20 @@ void net_serialize_game_state(Player players[], int p_count, Table *table,
     memcpy(buf + offset, &game_state, sizeof(int)); offset += sizeof(int);
     memcpy(buf + offset, &atu_taken_val, sizeof(bool)); offset += sizeof(bool);
     memcpy(buf + offset, &first_discard_id, sizeof(int)); offset += sizeof(int);
+
+    // Noi parametri de sincronizare UI
+    memcpy(buf + offset, &remaining_time, sizeof(int)); offset += sizeof(int);
+    memcpy(buf + offset, &action_time_limit, sizeof(int)); offset += sizeof(int);
+    memcpy(buf + offset, deck_pile_sizes, sizeof(int) * 20); offset += sizeof(int) * 20;
+    memcpy(buf + offset, swap_pending, sizeof(bool) * 4); offset += sizeof(bool) * 4;
+    memcpy(buf + offset, &global_has_error, sizeof(bool)); offset += sizeof(bool);
+    
+    char err_msg_buf[128];
+    memset(err_msg_buf, 0, 128);
+    if (global_error_msg) {
+        strncpy(err_msg_buf, global_error_msg, 127);
+    }
+    memcpy(buf + offset, err_msg_buf, 128); offset += 128;
     
     // Deck (copy entire struct)
     memcpy(buf + offset, deck, sizeof(Deck)); offset += sizeof(Deck);
@@ -366,7 +383,10 @@ void net_deserialize_game_state(const void *buffer, uint32_t len,
                                 Deck *deck, Tile dp[], int *dc,
                                 int *current_player, int *turn_number, Tile *atuu,
                                 int *atu_owner, int *game_state,
-                                bool *atu_taken_out, int *first_discard_id) {
+                                bool *atu_taken_out, int *first_discard_id,
+                                int *remaining_time, int *action_time_limit,
+                                int deck_pile_sizes[], bool swap_pending[],
+                                bool *global_has_error, char global_error_msg[]) {
     (void)len;
     const char *buf = (const char *)buffer;
     int offset = 0;
@@ -380,6 +400,14 @@ void net_deserialize_game_state(const void *buffer, uint32_t len,
     memcpy(game_state, buf + offset, sizeof(int)); offset += sizeof(int);
     memcpy(atu_taken_out, buf + offset, sizeof(bool)); offset += sizeof(bool);
     memcpy(first_discard_id, buf + offset, sizeof(int)); offset += sizeof(int);
+
+    // Noi parametri de sincronizare UI
+    memcpy(remaining_time, buf + offset, sizeof(int)); offset += sizeof(int);
+    memcpy(action_time_limit, buf + offset, sizeof(int)); offset += sizeof(int);
+    memcpy(deck_pile_sizes, buf + offset, sizeof(int) * 20); offset += sizeof(int) * 20;
+    memcpy(swap_pending, buf + offset, sizeof(bool) * 4); offset += sizeof(bool) * 4;
+    memcpy(global_has_error, buf + offset, sizeof(bool)); offset += sizeof(bool);
+    memcpy(global_error_msg, buf + offset, 128); offset += 128;
     
     memcpy(deck, buf + offset, sizeof(Deck)); offset += sizeof(Deck);
     
