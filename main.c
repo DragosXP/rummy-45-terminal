@@ -133,6 +133,15 @@ void show_end_game_screen(int winner_idx, bool deck_empty, Player players[], Tab
         }
     }
     
+    if (g_is_networked && g_room.is_host) {
+        char ge_buf[NET_BUFFER_SIZE];
+        uint32_t ge_len;
+        net_serialize_game_end(winner_idx, deck_empty, winner_closed_double,
+                               final_scores, table_points, hand_penalties, has_atu,
+                               ge_buf, &ge_len);
+        net_broadcast(&g_room, MSG_GAME_END, ge_buf, ge_len);
+    }
+
     // 2. Render screen
     clear();
     if (deck_empty) {
@@ -192,6 +201,81 @@ void show_end_game_screen(int winner_idx, bool deck_empty, Player players[], Tab
     for (int i = 0; i < player_count; i++) {
         if (players[i].username[0] != '\0') {
             update_account_score(&g_accounts, players[i].username, final_scores[i]);
+        }
+    }
+    
+    row += 2;
+    attron(COLOR_PAIR(6));
+    mvprintw(row, 30, "Apasă orice tastă pentru a ieși...");
+    attroff(COLOR_PAIR(6));
+    refresh();
+    cbreak();
+    timeout(-1);  // blocking mode
+    getch();
+    endwin();
+    exit(0);
+}
+
+void show_end_game_screen_client(int winner_idx, bool deck_empty, bool winner_closed_double,
+                                 const int final_scores[], const int table_points[],
+                                 const int hand_penalties[], const bool has_atu[],
+                                 Player players[]) {
+    clear();
+    if (deck_empty) {
+        attron(COLOR_PAIR(3) | A_BOLD);
+        mvprintw(8, 30, "╔══════════════════════════════════════╗");
+        mvprintw(9, 30, "║  JOC ÎNCHEIAT! Pachetul s-a terminat ║");
+        mvprintw(10, 30, "╚══════════════════════════════════════╝");
+        attroff(COLOR_PAIR(3) | A_BOLD);
+    } else {
+        attron(COLOR_PAIR(7) | A_BOLD);
+        mvprintw(8, 30, "╔══════════════════════════════════════╗");
+        mvprintw(9, 30, "║   FELICITĂRI! Jocul s-a terminat!    ║");
+        mvprintw(10, 30, "╚══════════════════════════════════════╝");
+        attroff(COLOR_PAIR(7) | A_BOLD);
+    }
+    
+    // Note: We use atuu_tile.number to determine the atu name
+    bool is_joc_dublu = (atuu_tile.number == 1 || atuu_tile.number == 0);
+    if (is_joc_dublu) {
+        attron(COLOR_PAIR(5) | A_BOLD);
+        mvprintw(12, 30, "⚡ JOC DUBLU! (Atuul a fost %s)", (atuu_tile.number == 0) ? "Joly" : "1");
+        attroff(COLOR_PAIR(5) | A_BOLD);
+    }
+    
+    if (winner_idx != -1 && !deck_empty && winner_closed_double) {
+        attron(COLOR_PAIR(5) | A_BOLD);
+        // Note: For client, we just assume the closing tile was double (the host calculated this).
+        // It could be JOLY or 1. Let's just say "1 / JOLY".
+        mvprintw(13, 30, "✨ ÎNCHIDERE CU JOLY SAU 1! (Scor înmulțit)");
+        attroff(COLOR_PAIR(5) | A_BOLD);
+    }
+    
+    int row = 15;
+    attron(COLOR_PAIR(6));
+    mvprintw(row++, 30, "── Scoruri Finale ──");
+    attroff(COLOR_PAIR(6));
+    
+    for (int i = 0; i < player_count; i++) {
+        if (!deck_empty && i == winner_idx) {
+            attron(COLOR_PAIR(7) | A_BOLD);
+            mvprintw(row++, 30, "★ %s: %d puncte (CÂȘTIGĂTOR)", players[i].username, final_scores[i]);
+            mvprintw(row++, 32, "(Etalat+Lipit: %d pct | Atu: %s | Inchidere: +50)", 
+                     table_points[i], has_atu[i] ? "+50" : "0");
+            attroff(COLOR_PAIR(7) | A_BOLD);
+            row++;
+        } else {
+            attron(COLOR_PAIR(6));
+            if (!players[i].has_melded) {
+                mvprintw(row++, 30, "  %s: %d pct (Penalizare neetalare %s)", 
+                         players[i].username, final_scores[i], has_atu[i] ? "-100 + 50" : "-100");
+            } else {
+                mvprintw(row++, 30, "  %s: %d pct", players[i].username, final_scores[i]);
+                mvprintw(row++, 32, "(Etalat+Lipit: %d pct | Penalizare tabla: -%d pct | Atu: %s)", 
+                         table_points[i], hand_penalties[i], has_atu[i] ? "+50" : "0");
+            }
+            attroff(COLOR_PAIR(6));
+            row++;
         }
     }
     
@@ -2675,6 +2759,31 @@ round_start:
                                 strncpy(global_error_msg, rcv_error_msg, sizeof(global_error_msg) - 1);
                                 gettimeofday(&global_error_time, NULL);
                             }
+
+                            // If it's no longer our turn, clear any holding state
+                            if (current_player != g_local_player_index) {
+                                is_holding = false;
+                                held_r = -1;
+                                held_c = -1;
+                                meld_selection_mode = false;
+                                selecting_discard = false;
+                                for (int r = 0; r < 2; r++) {
+                                    for (int c = 0; c < 15; c++) {
+                                        selected_tiles[g_local_player_index][r][c] = false;
+                                    }
+                                }
+                            }
+                        } else if (type == MSG_GAME_END) {
+                            int rcv_winner_idx;
+                            bool rcv_deck_empty, rcv_winner_closed_double;
+                            int rcv_final_scores[NET_MAX_PLAYERS];
+                            int rcv_table_points[NET_MAX_PLAYERS];
+                            int rcv_hand_penalties[NET_MAX_PLAYERS];
+                            bool rcv_has_atu[NET_MAX_PLAYERS];
+                            net_deserialize_game_end(buffer, recv_len, &rcv_winner_idx, &rcv_deck_empty, &rcv_winner_closed_double,
+                                                     rcv_final_scores, rcv_table_points, rcv_hand_penalties, rcv_has_atu);
+                            show_end_game_screen_client(rcv_winner_idx, rcv_deck_empty, rcv_winner_closed_double,
+                                                        rcv_final_scores, rcv_table_points, rcv_hand_penalties, rcv_has_atu, players);
                         } else if (type == MSG_HAND_UPDATE) {
                             int p_idx;
                             net_deserialize_hand(buffer, recv_len, &players[g_local_player_index], &p_idx, boards[g_local_player_index]);
@@ -2833,6 +2942,8 @@ round_start:
         mvprintw(39, 0, "                                                                                                      ");
 
         // Render dynamic parts
+        bool is_my_turn = !g_is_networked || (current_player == g_local_player_index);
+
         draw_header(players, current_player, state);
         draw_shared_table(&table, is_holding, cursor_r, cursor_c, current_player, held_r, held_c);
         int disp_cursor = selecting_discard ? discard_cursor :
@@ -2841,9 +2952,9 @@ round_start:
         ((state == STATE_PLAY && cursor_r == -1 && cursor_c == 14 && !meld_selection_mode) ?
         ((discard_count + 1 - 22 < 0) ? 0 : (discard_count + 1 - 22)) :
         ((discard_count - 22 < 0) ? 0 : (discard_count - 22)));
-        bool disp_select = selecting_discard || (state == STATE_DRAW && !select_deck && !cursor_on_board_during_draw) || (state == STATE_PLAY && cursor_r == -1 && cursor_c == 14 && !meld_selection_mode);
+        bool disp_select = is_my_turn && (selecting_discard || (state == STATE_DRAW && !select_deck && !cursor_on_board_during_draw) || (state == STATE_PLAY && cursor_r == -1 && cursor_c == 14 && !meld_selection_mode));
         draw_discard_pile(disp_cursor, disp_view, disp_select);
-        draw_deck_piles(deck.size, (state == STATE_DRAW && !selecting_discard && select_deck && !cursor_on_board_during_draw), (state == STATE_DRAW && !selecting_discard && selecting_atu && !cursor_on_board_during_draw));
+        draw_deck_piles(deck.size, is_my_turn && (state == STATE_DRAW && !selecting_discard && select_deck && !cursor_on_board_during_draw), is_my_turn && (state == STATE_DRAW && !selecting_discard && selecting_atu && !cursor_on_board_during_draw));
         draw_board(interact_p, cursor_r, cursor_c, is_holding, held_r, held_c, state);
 
         if (cursor_r == 2) {
@@ -2880,7 +2991,7 @@ round_start:
         }
         refresh();
         ch = getch();
-        bool is_my_turn = !g_is_networked || (current_player == g_local_player_index);
+        is_my_turn = !g_is_networked || (current_player == g_local_player_index);
 
         if (g_is_networked && !is_my_turn) {
             // Force cursor to private board if it was outside

@@ -476,6 +476,37 @@ void net_deserialize_hand(const void *buffer, uint32_t len,
     memcpy(player->hand, buf + offset, sizeof(Tile) * player->tile_count);
 }
 
+void net_serialize_game_end(int winner_idx, bool deck_empty, bool winner_closed_double,
+                            const int final_scores[], const int table_points[],
+                            const int hand_penalties[], const bool has_atu[],
+                            void *buffer, uint32_t *len) {
+    NetGameEnd *ge = (NetGameEnd *)buffer;
+    memset(ge, 0, sizeof(NetGameEnd));
+    ge->winner_idx = winner_idx;
+    ge->deck_empty = deck_empty;
+    ge->winner_closed_double = winner_closed_double;
+    memcpy(ge->final_scores, final_scores, sizeof(int) * NET_MAX_PLAYERS);
+    memcpy(ge->table_points, table_points, sizeof(int) * NET_MAX_PLAYERS);
+    memcpy(ge->hand_penalties, hand_penalties, sizeof(int) * NET_MAX_PLAYERS);
+    memcpy(ge->has_atu, has_atu, sizeof(bool) * NET_MAX_PLAYERS);
+    *len = sizeof(NetGameEnd);
+}
+
+void net_deserialize_game_end(const void *buffer, uint32_t len,
+                              int *winner_idx, bool *deck_empty, bool *winner_closed_double,
+                              int final_scores[], int table_points[],
+                              int hand_penalties[], bool has_atu[]) {
+    (void)len;
+    const NetGameEnd *ge = (const NetGameEnd *)buffer;
+    *winner_idx = ge->winner_idx;
+    *deck_empty = ge->deck_empty;
+    *winner_closed_double = ge->winner_closed_double;
+    memcpy(final_scores, ge->final_scores, sizeof(int) * NET_MAX_PLAYERS);
+    memcpy(table_points, ge->table_points, sizeof(int) * NET_MAX_PLAYERS);
+    memcpy(hand_penalties, ge->hand_penalties, sizeof(int) * NET_MAX_PLAYERS);
+    memcpy(has_atu, ge->has_atu, sizeof(bool) * NET_MAX_PLAYERS);
+}
+
 // ========== UDP Discovery System for 6-Character Room Codes ==========
 #include <pthread.h>
 

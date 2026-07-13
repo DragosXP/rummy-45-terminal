@@ -142,6 +142,26 @@ void net_serialize_hand(Player *player, int player_idx, Tile board[2][15],
 void net_deserialize_hand(const void *buffer, uint32_t len,
                           Player *player, int *player_idx, Tile board[2][15]);
 
+typedef struct {
+    int winner_idx;
+    bool deck_empty;
+    bool winner_closed_double;
+    int final_scores[NET_MAX_PLAYERS];
+    int table_points[NET_MAX_PLAYERS];
+    int hand_penalties[NET_MAX_PLAYERS];
+    bool has_atu[NET_MAX_PLAYERS];
+} __attribute__((packed)) NetGameEnd;
+
+void net_serialize_game_end(int winner_idx, bool deck_empty, bool winner_closed_double,
+                            const int final_scores[], const int table_points[],
+                            const int hand_penalties[], const bool has_atu[],
+                            void *buffer, uint32_t *len);
+
+void net_deserialize_game_end(const void *buffer, uint32_t len,
+                              int *winner_idx, bool *deck_empty, bool *winner_closed_double,
+                              int final_scores[], int table_points[],
+                              int hand_penalties[], bool has_atu[]);
+
 // UDP discovery functions
 void start_udp_discovery(const char *code);
 void stop_udp_discovery(void);
