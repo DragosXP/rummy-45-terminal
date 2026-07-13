@@ -86,6 +86,8 @@ typedef struct {
     Tile discard_pile[TOTAL_TILES];
     int discard_count;
     int remaining_deck_cards;
+    Tile atuu_tile;
+    bool atu_taken;
 } PayloadSyncPublicBoard;
 
 typedef struct {
@@ -169,6 +171,8 @@ typedef struct {
     int tile_count;
     bool has_melded;
     
+    Tile atuu_tile;
+    bool atu_taken;
     
     char last_msg[128];
 } LocalClientState;
