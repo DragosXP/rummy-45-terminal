@@ -315,7 +315,9 @@ void net_deserialize_player_list(const void *buffer, uint32_t len, RoomState *ro
 void net_serialize_game_state(Player players[], int p_count, Table *table,
                               Deck *deck, Tile dp[], int dc,
                               int current_player, int turn_number, Tile atuu,
-                              int atu_owner, void *buffer, uint32_t *len) {
+                              int atu_owner, int game_state, bool atu_taken_val,
+                              int first_discard_id,
+                              void *buffer, uint32_t *len) {
     char *buf = (char *)buffer;
     int offset = 0;
     
@@ -325,6 +327,10 @@ void net_serialize_game_state(Player players[], int p_count, Table *table,
     memcpy(buf + offset, &turn_number, sizeof(int)); offset += sizeof(int);
     memcpy(buf + offset, &atuu, sizeof(Tile)); offset += sizeof(Tile);
     memcpy(buf + offset, &atu_owner, sizeof(int)); offset += sizeof(int);
+    // Stare joc (draw/play/discard), atu luat, prima piesa decartata
+    memcpy(buf + offset, &game_state, sizeof(int)); offset += sizeof(int);
+    memcpy(buf + offset, &atu_taken_val, sizeof(bool)); offset += sizeof(bool);
+    memcpy(buf + offset, &first_discard_id, sizeof(int)); offset += sizeof(int);
     
     // Deck (copy entire struct)
     memcpy(buf + offset, deck, sizeof(Deck)); offset += sizeof(Deck);
@@ -359,7 +365,8 @@ void net_deserialize_game_state(const void *buffer, uint32_t len,
                                 Player players[], int *p_count, Table *table,
                                 Deck *deck, Tile dp[], int *dc,
                                 int *current_player, int *turn_number, Tile *atuu,
-                                int *atu_owner) {
+                                int *atu_owner, int *game_state,
+                                bool *atu_taken_out, int *first_discard_id) {
     (void)len;
     const char *buf = (const char *)buffer;
     int offset = 0;
@@ -369,6 +376,10 @@ void net_deserialize_game_state(const void *buffer, uint32_t len,
     memcpy(turn_number, buf + offset, sizeof(int)); offset += sizeof(int);
     memcpy(atuu, buf + offset, sizeof(Tile)); offset += sizeof(Tile);
     memcpy(atu_owner, buf + offset, sizeof(int)); offset += sizeof(int);
+    // Stare joc, atu luat, prima piesa decartata
+    memcpy(game_state, buf + offset, sizeof(int)); offset += sizeof(int);
+    memcpy(atu_taken_out, buf + offset, sizeof(bool)); offset += sizeof(bool);
+    memcpy(first_discard_id, buf + offset, sizeof(int)); offset += sizeof(int);
     
     memcpy(deck, buf + offset, sizeof(Deck)); offset += sizeof(Deck);
     

@@ -116,16 +116,19 @@ void net_serialize_player_list(RoomState *room, void *buffer, uint32_t *len);
 void net_deserialize_player_list(const void *buffer, uint32_t len, RoomState *room);
 
 // Serializare completa stare joc pentru broadcast
-void net_serialize_game_state(Player players[], int player_count, Table *table, 
+void net_serialize_game_state(Player players[], int player_count, Table *table,
                               Deck *deck, Tile discard_pile[], int discard_count,
                               int current_player, int turn_number, Tile atuu_tile,
-                              int initial_atu_owner, void *buffer, uint32_t *len);
+                              int initial_atu_owner, int game_state, bool atu_taken,
+                              int first_discard_tile_id,
+                              void *buffer, uint32_t *len);
 
 void net_deserialize_game_state(const void *buffer, uint32_t len,
                                 Player players[], int *player_count, Table *table,
                                 Deck *deck, Tile discard_pile[], int *discard_count,
                                 int *current_player, int *turn_number, Tile *atuu_tile,
-                                int *initial_atu_owner);
+                                int *initial_atu_owner, int *game_state,
+                                bool *atu_taken, int *first_discard_tile_id);
 
 // Serializare hand update (doar mana unui jucator specific)
 void net_serialize_hand(Player *player, int player_idx, Tile board[2][15],
