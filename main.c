@@ -2314,13 +2314,16 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
                     ui->held_r = -1;
                     ui->held_c = -1;
                 } else {
-                    memset(out_pkt, 0, sizeof(NetPacket));
-                    out_pkt->type = REQ_DRAW_TILE;
-                    out_pkt->sender_id = state->local_player_id;
                     if (ui->select_deck) {
+                        memset(out_pkt, 0, sizeof(NetPacket));
+                        out_pkt->type = REQ_DRAW_TILE;
+                        out_pkt->sender_id = state->local_player_id;
                         out_pkt->payload.req_draw.source = SRC_DECK;
                         out_pkt->payload.req_draw.discard_index = -1;
                     } else if (ui->selecting_discard) {
+                        memset(out_pkt, 0, sizeof(NetPacket));
+                        out_pkt->type = REQ_DRAW_TILE;
+                        out_pkt->sender_id = state->local_player_id;
                         out_pkt->payload.req_draw.source = SRC_DISCARD;
                         out_pkt->payload.req_draw.discard_index = cx;
                     }

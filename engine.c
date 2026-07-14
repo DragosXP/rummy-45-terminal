@@ -574,8 +574,7 @@ int calculate_meld_points(Tile tiles[], int count) {
 
         int total = 0;
         for (int i = 0; i < count; i++) {
-            if (resolved[i] == 1 || resolved[i] == 14) total += 25;
-            else if (resolved[i] >= 10) total += 10;
+            if (resolved[i] >= 10) total += 10;
             else total += 5;
         }
         return total;
