@@ -22,7 +22,7 @@ typedef enum {
     REQ_ADD_LIPITURA,    // Lipirea unei piese la o formatie de pe masa
     REQ_DISCARD_TILE,    // Decartare (semnifica si terminarea turei)
     REQ_REPLACE_JOKER,   // Jucatorul inlocuieste un Joker de pe masa
-    
+    REQ_DEBUG_DD,        // Inlocuieste mana jucatorului cu un set fix (debug)
     // ---- SERVER -> CLIENT (Syncs) ----
     SYNC_GAME_STATE,     // Cine este la rand, in ce faza este tura, scoruri
     SYNC_PUBLIC_BOARD,   // Masa comuna (Table), pachetul de decartare

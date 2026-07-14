@@ -881,8 +881,8 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
         int draw_count = meld->count;
         int limit_draw = (draw_count > 7) ? 7 : draw_count;
         
-        int border_pair = is_targeted ? 7 : 6;
-
+        int cursor_color = ui_state->meld_selection_mode ? 12 : 7;
+        int border_pair = is_targeted ? cursor_color : 6;
         if (start_r > 13) {
             if (start_r == 14) {
                 attron(COLOR_PAIR(border_pair));
@@ -989,8 +989,8 @@ void draw_discard_pile(const LocalClientState *state, const LocalUIState *ui_sta
 
         int col = 5 + i * 4;
         bool is_cursor = (is_selecting_discard && idx == cursor_index);
-        int border_pair = is_cursor ? 7 : 6;
-
+        int cursor_color = ui_state->meld_selection_mode ? 12 : 7;
+        int border_pair = is_cursor ? cursor_color : 6;
         if (idx == state->discard_count) {
             attron(COLOR_PAIR(border_pair));
             mvprintw(14, col, "┌──┐");
@@ -1025,32 +1025,24 @@ void draw_deck_piles(const LocalClientState *state, const LocalUIState *ui_state
         mvprintw(r, 0, "                                                                                                      ");
     }
 
-    int num_piles = 15 - 2 * g_room.player_count;
-    if (num_piles < 1) num_piles = 1;
-    if (num_piles > 20) num_piles = 20;
+    int remaining = state->deck_remaining;
+    if (remaining <= 0) return;
+
+    int current_num_piles = (remaining + 6) / 7;
+    if (current_num_piles > 20) current_num_piles = 20;
 
     int deck_pile_sizes[20] = {0};
-    int remaining = state->deck_remaining;
-    for (int i = num_piles - 1; i >= 0 && remaining > 0; i--) {
-        deck_pile_sizes[i] = (remaining > 7) ? 7 : remaining;
-        remaining -= deck_pile_sizes[i];
+    int remainder = remaining % 7;
+    if (remainder == 0) remainder = 7;
+
+    deck_pile_sizes[0] = remainder;
+    for (int i = 1; i < current_num_piles; i++) {
+        deck_pile_sizes[i] = 7;
     }
 
-    int active_pile_idx = -1;
-    for (int i = 0; i < num_piles; i++) {
-        if (deck_pile_sizes[i] > 0) {
-            active_pile_idx = i;
-            break;
-        }
-    }
-
-    int last_active_idx = -1;
-    for (int i = num_piles - 1; i >= 0; i--) {
-        if (deck_pile_sizes[i] > 0) {
-            last_active_idx = i;
-            break;
-        }
-    }
+    int num_piles = current_num_piles;
+    int active_pile_idx = 0;
+    int last_active_idx = current_num_piles - 1;
 
     for (int col_idx = 0; col_idx < num_piles; col_idx++) {
         int col = 5 + col_idx * 4;
@@ -1061,7 +1053,8 @@ void draw_deck_piles(const LocalClientState *state, const LocalUIState *ui_state
         bool is_highlighted = (ui_state->select_deck && col_idx == active_pile_idx) || (ui_state->selecting_atu && col_idx == last_active_idx);
         int height = (size > 7) ? 7 : size;
 
-        int bottom_border_pair = (is_highlighted && height <= 1) ? 7 : 6;
+        int cursor_color = ui_state->meld_selection_mode ? 12 : 7;
+        int bottom_border_pair = (is_highlighted && height <= 1) ? cursor_color : 6;
         attron(COLOR_PAIR(bottom_border_pair));
         mvprintw(25, col, "└──┘");
         attroff(COLOR_PAIR(bottom_border_pair));
@@ -1069,12 +1062,12 @@ void draw_deck_piles(const LocalClientState *state, const LocalUIState *ui_state
         int top_y = 25 - height - 1;
         int body_y = 25 - height;
 
-        int top_border_pair = is_highlighted ? 7 : 6;
+        int top_border_pair = is_highlighted ? cursor_color : 6;
         attron(COLOR_PAIR(top_border_pair));
         mvprintw(top_y, col, "┌──┐");
         attroff(COLOR_PAIR(top_border_pair));
 
-        int body_border_pair = is_highlighted ? 7 : 6;
+        int body_border_pair = is_highlighted ? cursor_color : 6;
         if (col_idx == last_active_idx && !state->atu_taken) {
             int cp = (state->atuu_tile.number == 0) ? 5 : state->atuu_tile.color + 1;
             attron(COLOR_PAIR(body_border_pair));
@@ -1096,7 +1089,7 @@ void draw_deck_piles(const LocalClientState *state, const LocalUIState *ui_state
         }
 
         for (int h = 1; h < height; h++) {
-            int stack_border_pair = (is_highlighted && h == 1) ? 7 : 6;
+            int stack_border_pair = (is_highlighted && h == 1) ? cursor_color : 6;
             attron(COLOR_PAIR(stack_border_pair));
             mvprintw(body_y + h, col, "├──┤");
             attroff(COLOR_PAIR(stack_border_pair));
@@ -1113,6 +1106,77 @@ int get_board_col(int c) {
     }
 }
 
+
+typedef struct {
+    int start_c;
+    int end_c;
+    int points;
+} BoardMeld;
+
+static int solve_row_dp(Tile row_tiles[15], int start, int dp_points[16], int dp_next[16]) {
+    if (start >= 15) return 0;
+    if (dp_points[start] != -1) return dp_points[start];
+
+    // Option 1: skip tiles[start]
+    int max_pts = solve_row_dp(row_tiles, start + 1, dp_points, dp_next);
+    int best_next = -1;
+
+    // Option 2: try to form a meld starting at start, ending at end_c
+    for (int end_c = start + 2; end_c < 15; end_c++) {
+        // check if there is any empty tile in [start ... end_c]
+        bool has_empty = false;
+        for (int k = start; k <= end_c; k++) {
+            if (row_tiles[k].id == -1) {
+                has_empty = true;
+                break;
+            }
+        }
+        if (has_empty) {
+            break; // Can't extend past empty tile
+        }
+
+        int len = end_c - start + 1;
+        if (is_valid_meld(&row_tiles[start], len)) {
+            int pts = calculate_meld_points(&row_tiles[start], len);
+            int total_pts = pts + solve_row_dp(row_tiles, end_c + 1, dp_points, dp_next);
+            if (total_pts > max_pts) {
+                max_pts = total_pts;
+                best_next = end_c;
+            }
+        }
+    }
+
+    dp_next[start] = best_next;
+    dp_points[start] = max_pts;
+    return max_pts;
+}
+
+static int get_board_melds(Tile row_tiles[15], BoardMeld melds[5]) {
+    int dp_points[16];
+    int dp_next[16];
+    for (int i = 0; i < 16; i++) {
+        dp_points[i] = -1;
+        dp_next[i] = -1;
+    }
+
+    solve_row_dp(row_tiles, 0, dp_points, dp_next);
+
+    int c = 0;
+    int meld_cnt = 0;
+    while (c < 15) {
+        if (dp_next[c] != -1) {
+            int end_c = dp_next[c];
+            melds[meld_cnt].start_c = c;
+            melds[meld_cnt].end_c = end_c;
+            melds[meld_cnt].points = calculate_meld_points(&row_tiles[c], end_c - c + 1);
+            meld_cnt++;
+            c = end_c + 1;
+        } else {
+            c++;
+        }
+    }
+    return meld_cnt;
+}
 
 // Renders the player's board at rows 26-36
 void draw_hand(const LocalClientState *state, const LocalUIState *ui_state) {
@@ -1211,6 +1275,53 @@ void draw_hand(const LocalClientState *state, const LocalUIState *ui_state) {
                     attroff(COLOR_PAIR(11));
                 }
             }
+        }
+    }
+
+    // --- LOGICA NOUĂ: Scanare grupuri consecutive și afișare punctaj (= XXpct =) ---
+    for (int r = 0; r < 2; r++) {
+        BoardMeld row_melds[5];
+        // Cast state->private_board to remove const qualifier for DP function
+        Tile row_tiles[15];
+        for(int i=0; i<15; i++) row_tiles[i] = state->private_board[r][i];
+        
+        int meld_cnt = get_board_melds(row_tiles, row_melds);
+
+        for (int m = 0; m < meld_cnt; m++) {
+            int start_c = row_melds[m].start_c;
+            int end_c = row_melds[m].end_c;
+            int pts = row_melds[m].points;
+
+            // Calculăm coordonatele pentru centrare sub acest grup
+            int col_start = get_board_col(start_c);
+            int col_end = get_board_col(end_c) + 6; // Spans to the end of the last tile
+            int total_width = col_end - col_start;
+
+            char pct_text[32];
+            snprintf(pct_text, sizeof(pct_text), "=%dpct=", pts);
+            int text_len = strlen(pct_text);
+
+            // Create the full bar filled with '='
+            char bar[120];
+            int target_width = total_width;
+            if (target_width >= (int)sizeof(bar)) target_width = (int)sizeof(bar) - 1;
+            memset(bar, '=', target_width);
+            bar[target_width] = '\0';
+
+            // Insert the score text in the center
+            int insert_pos = (target_width - text_len) / 2;
+            if (insert_pos < 0) insert_pos = 0;
+            for (int i = 0; i < text_len && insert_pos + i < target_width; i++) {
+                bar[insert_pos + i] = pct_text[i];
+            }
+
+            // Bordura de jos se află exact la (s + r * 5 + 4)
+            int print_row = s + r * 5 + 4;
+
+            // Printăm scorul activând perechea de culori 13 (alb pe fundal mov)
+            attron(COLOR_PAIR(13) | A_BOLD);
+            mvprintw(print_row, col_start, "%s", bar);
+            attroff(COLOR_PAIR(13) | A_BOLD);
         }
     }
 }
@@ -2062,12 +2173,23 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
             if (cy == 0) cy = 1;
         }
     } else if (ch == 'd' || ch == 'D') {
-        if (z == ZONE_HAND && state->private_board[cy][cx].id != -1) {
+        static bool last_was_d = false;
+        if (last_was_d) {
             if (out_pkt) {
                 memset(out_pkt, 0, sizeof(NetPacket));
-                out_pkt->type = REQ_DISCARD_TILE;
+                out_pkt->type = REQ_DEBUG_DD;
                 out_pkt->sender_id = state->local_player_id;
-                out_pkt->payload.req_action.hand_index = cy * 15 + cx;
+            }
+            last_was_d = false;
+        } else {
+            last_was_d = true;
+            if (z == ZONE_HAND && state->private_board[cy][cx].id != -1) {
+                if (out_pkt) {
+                    memset(out_pkt, 0, sizeof(NetPacket));
+                    out_pkt->type = REQ_DISCARD_TILE;
+                    out_pkt->sender_id = state->local_player_id;
+                    out_pkt->payload.req_action.hand_index = cy * 15 + cx;
+                }
             }
         }
     } else if (ch == '\n' || ch == '\r' || ch == 10) {
@@ -2191,9 +2313,6 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
                     ui->is_holding = false;
                     ui->held_r = -1;
                     ui->held_c = -1;
-                    ui->cursor_zone = ZONE_HAND;
-                    cy = ui->saved_hand_y;
-                    cx = ui->saved_hand_x;
                 } else {
                     memset(out_pkt, 0, sizeof(NetPacket));
                     out_pkt->type = REQ_DRAW_TILE;
@@ -2277,6 +2396,50 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
                     memcpy(sync_pkt.payload.sync_hand.private_board, boards[p_idx], sizeof(Tile) * 2 * 15);
                     net_send_packet(room->client_sockets[p_idx], &sync_pkt);
                 }
+            }
+        }
+    } else if (packet->type == REQ_DEBUG_DD) {
+        int p_idx = packet->sender_id;
+        if (p_idx >= 0 && p_idx < room->player_count) {
+            Player *p = &players[p_idx];
+            for (int r = 0; r < 2; r++) {
+                for (int c = 0; c < 15; c++) {
+                    boards[p_idx][r][c].id = -1;
+                    boards[p_idx][r][c].number = -1;
+                }
+            }
+            Tile debug_tiles[] = {
+                { .id = 1000, .number = 1, .color = 0, .points = 25 },
+                { .id = 1001, .number = 1, .color = 1, .points = 25 },
+                { .id = 1002, .number = 1, .color = 2, .points = 25 },
+                { .id = 1003, .number = 1, .color = 3, .points = 25 },
+                { .id = 1004, .number = 11, .color = 0, .points = 10 },
+                { .id = 1005, .number = 12, .color = 0, .points = 10 },
+                { .id = 1006, .number = 13, .color = 0, .points = 10 },
+                { .id = 1007, .number = 1, .color = 0, .points = 5 },
+                { .id = 1008, .number = 5, .color = 1, .points = 5 },
+                { .id = 1009, .number = 6, .color = 1, .points = 5 },
+                { .id = 1010, .number = 7, .color = 1, .points = 5 },
+                { .id = 1011, .number = 8, .color = 1, .points = 5 },
+                { .id = 1012, .number = 0, .color = JOKER_COLOR, .points = 50 },
+                { .id = 1013, .number = 0, .color = JOKER_COLOR, .points = 50 },
+            };
+            int r = 0, c = 0;
+            for(int i = 0; i < 14; i++) {
+                boards[p_idx][r][c] = debug_tiles[i];
+                c++;
+            }
+            p->tile_count = 14;
+            
+            if (room->client_sockets[p_idx] >= 0) {
+                NetPacket sync_pkt;
+                memset(&sync_pkt, 0, sizeof(NetPacket));
+                sync_pkt.type = SYNC_PRIVATE_HAND;
+                sync_pkt.sender_id = 0;
+                sync_pkt.payload.sync_hand.tile_count = p->tile_count;
+                sync_pkt.payload.sync_hand.has_melded = p->has_melded;
+                memcpy(sync_pkt.payload.sync_hand.private_board, boards[p_idx], sizeof(Tile) * 2 * 15);
+                net_send_packet(room->client_sockets[p_idx], &sync_pkt);
             }
         }
     } else if (packet->type == REQ_DRAW_TILE) {
