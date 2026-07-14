@@ -511,49 +511,7 @@ void render_frame(const LocalClientState *state, const LocalUIState *ui_state) {
     draw_deck_piles(state, ui_state);
     draw_hand(state, ui_state);
 
-    if (ui_state->is_holding) {
-        Tile tile = state->private_board[ui_state->held_r][ui_state->held_c];
-        if (tile.id != -1) {
-            int r = -1, c = -1;
-            if (ui_state->cursor_zone == ZONE_HAND) {
-                r = 26 + ui_state->cursor_y * 5 + 1;
-                c = ui_state->cursor_x < 14 ? 6 + ui_state->cursor_x * 6 : 91;
-            } else if (ui_state->cursor_zone == ZONE_DISCARD) {
-                r = 14;
-                c = 5 + ui_state->cursor_x * 4;
-            } else if (ui_state->cursor_zone == ZONE_BOARD) {
-                int m_idx = ui_state->cursor_x;
-                if (m_idx >= 0 && m_idx < state->table.meld_count) {
-                    int owner = state->table.melds[m_idx].owner_id;
-                    if (owner < 0 || owner > 3) owner = 0;
-                    int row_idx = 0;
-                    for (int i = 0; i < m_idx; i++) {
-                        if (state->table.melds[i].owner_id == owner) row_idx++;
-                    }
-                    int col_starts[4] = {3, 29, 55, 81};
-                    r = 2 + row_idx * 3;
-                    c = col_starts[owner] + (ui_state->attach_side == 1 ? (state->table.melds[m_idx].count * 2 + 1) : -3);
-                } else {
-                    r = 14; c = 3;
-                }
-            }
-            if (r != -1 && c != -1) {
-                int cp = (tile.number == 0) ? 5 : tile.color + 1;
-                attron(COLOR_PAIR(8) | A_BOLD);
-                mvprintw(r, c, "┌──┐");
-                mvprintw(r+1, c, "│");
-                attroff(COLOR_PAIR(8) | A_BOLD);
-                attron(COLOR_PAIR(cp) | A_BOLD);
-                if (tile.number == 0) printw(":)");
-                else printw("%2d", tile.number);
-                attroff(COLOR_PAIR(cp) | A_BOLD);
-                attron(COLOR_PAIR(8) | A_BOLD);
-                printw("│");
-                mvprintw(r+2, c, "└──┘");
-                attroff(COLOR_PAIR(8) | A_BOLD);
-            }
-        }
-    }
+    // Floating tile rendering has been removed as requested.
 
     // Render global errors if any (even Dumb Client can show server msgs)
     if (global_has_error) {
@@ -1013,11 +971,7 @@ void draw_discard_pile(const LocalClientState *state, const LocalUIState *ui_sta
     bool is_selecting_discard = ui_state->selecting_discard;
     int cursor_index = ui_state->discard_cursor;
     
-    // Check if network cursor is in discard zone
-    if (ui_state->cursor_zone == ZONE_DISCARD) {
-        is_selecting_discard = true;
-        cursor_index = ui_state->cursor_x;
-    }
+    // Use explicit UI state instead of blanket ZONE_DISCARD check
 
     if (is_selecting_discard && cursor_index == state->discard_count) {
         limit = state->discard_count + 1;
@@ -2047,21 +2001,12 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
             else if (cy == 0) {
                 ui->saved_hand_x = cx;
                 ui->saved_hand_y = 0;
-                if (ui->meld_selection_mode || ui->is_holding) {
-                    ui->cursor_zone = ZONE_DISCARD;
-                    ui->select_deck = false;
-                    ui->selecting_atu = false;
-                    ui->selecting_discard = true;
-                    ui->discard_cursor = state->discard_count > 0 ? state->discard_count - 1 : 0;
-                    cx = ui->discard_cursor;
-                    cy = 0;
-                } else {
-                    ui->cursor_zone = ZONE_DISCARD;
-                    ui->select_deck = true;
-                    ui->selecting_discard = false;
-                    cy = 0;
-                    cx = 0;
-                }
+                ui->cursor_zone = ZONE_DISCARD;
+                ui->select_deck = true;
+                ui->selecting_discard = false;
+                ui->selecting_atu = false;
+                cy = 0;
+                cx = 0;
             }
         } else if (z == ZONE_BOARD) {
             table_nav_up(&cx, (Table*)&state->table);
@@ -2070,14 +2015,20 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
                 ui->select_deck = false;
                 ui->selecting_atu = false;
                 ui->selecting_discard = true;
-                ui->discard_cursor = state->discard_count > 0 ? state->discard_count - 1 : 0;
+                if (ui->is_holding) {
+                    ui->discard_cursor = state->discard_count;
+                } else {
+                    ui->discard_cursor = state->discard_count > 0 ? state->discard_count - 1 : 0;
+                }
                 cx = ui->discard_cursor;
             } else if (ui->selecting_discard) {
-                ui->selecting_discard = false;
-                ui->cursor_zone = ZONE_BOARD;
-                cy = 0;
-                cx = ui->saved_board_x;
-                if (cx == 14) cx = state->table.meld_count > 0 ? state->table.meld_count - 1 : 0;
+                if (state->table.meld_count > 0) {
+                    ui->selecting_discard = false;
+                    ui->cursor_zone = ZONE_BOARD;
+                    cy = 0;
+                    cx = ui->saved_board_x;
+                    if (cx == 14) cx = state->table.meld_count > 0 ? state->table.meld_count - 1 : 0;
+                }
             }
         }
     } else if (ch == KEY_DOWN) {
@@ -2090,13 +2041,7 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
                 cx = ui->saved_hand_x;
             } else if (ui->selecting_discard) {
                 ui->selecting_discard = false;
-                if (ui->meld_selection_mode || ui->is_holding) {
-                    ui->cursor_zone = ZONE_HAND;
-                    cy = ui->saved_hand_y;
-                    cx = ui->saved_hand_x;
-                } else {
-                    ui->select_deck = true;
-                }
+                ui->select_deck = true;
             }
         } else if (z == ZONE_BOARD) {
             int old_cx = cx;
@@ -2106,7 +2051,11 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
                 ui->selecting_discard = true;
                 ui->select_deck = false;
                 ui->selecting_atu = false;
-                ui->discard_cursor = state->discard_count > 0 ? state->discard_count - 1 : 0;
+                if (ui->is_holding) {
+                    ui->discard_cursor = state->discard_count;
+                } else {
+                    ui->discard_cursor = state->discard_count > 0 ? state->discard_count - 1 : 0;
+                }
                 cx = ui->discard_cursor;
             }
         } else if (z == ZONE_HAND) {
