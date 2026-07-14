@@ -908,10 +908,11 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
         } else {
             meld = &state->table.melds[m];
         }
-        int row_idx = m / 4;
-        int col_idx = m % 4;
+        int owner = meld->owner_id;
+        int row_idx = player_meld_counts[owner];
         int start_r = 2 + row_idx * 3;
-        int start_c = col_starts[col_idx];
+        int start_c = col_starts[owner];
+        player_meld_counts[owner]++;
 
         bool is_targeted = (has_board_cursor && cursor_m == m);
         int draw_count = meld->count;
@@ -934,11 +935,7 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
             continue;
         }
 
-        // Calculate score
-        int score = 0;
-        for (int t = 0; t < meld->count; t++) {
-            score += meld->tiles[t].points;
-        }
+
 
         // Draw top border
         attron(COLOR_PAIR(border_pair));
@@ -995,12 +992,7 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
         printw("┘");
         attroff(COLOR_PAIR(border_pair));
 
-        // Draw score below
-        if (!is_preview_instance) {
-            attron(A_BOLD);
-            mvprintw(start_r + 3, start_c, "[%d pct]", score);
-            attroff(A_BOLD);
-        }
+
     }
 }
 
