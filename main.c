@@ -2690,10 +2690,13 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
         int p_idx = packet->sender_id;
         if (p_idx >= 0 && p_idx < room->player_count && *current_player == p_idx) {
             int hand_idx = packet->payload.req_lipitura.hand_index;
+            int r = hand_idx / 15;
+            int c = hand_idx % 15;
             int meld_idx = packet->payload.req_lipitura.table_meld_index;
             int side = packet->payload.req_lipitura.side;
-            if (hand_idx >= 0 && hand_idx < players[p_idx].tile_count && meld_idx >= 0 && meld_idx < table->meld_count) {
-                Tile tile = players[p_idx].hand[hand_idx];
+            if (r >= 0 && r < 2 && c >= 0 && c < 15 && meld_idx >= 0 && meld_idx < table->meld_count) {
+                Tile tile = boards[p_idx][r][c];
+                if (tile.id == -1) return; // Invalid tile
                 if (!players[p_idx].has_melded) {
                     NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
                     alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Trebuie sa te etalezi!");
@@ -2704,9 +2707,9 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
                     net_send_packet(room->client_sockets[p_idx], &alert_pkt);
                 } else if (can_attach_tile_to_side(&table->melds[meld_idx], tile, side)) {
                     if (attach_tile_to_meld_side(table, meld_idx, tile, side, p_idx)) {
-                        int indices[1] = {hand_idx};
-                        remove_tiles_from_hand(&players[p_idx], indices, 1);
-                        init_boards_from_players(players, room->player_count);
+                        boards[p_idx][r][c].id = -1;
+                        boards[p_idx][r][c].number = -1;
+                        sync_board_to_player(p_idx, &players[p_idx]);
                         for (int i = 0; i < room->player_count; i++) {
                             if (room->client_sockets[i] >= 0) {
                                 NetPacket sync_b; memset(&sync_b, 0, sizeof(NetPacket));
@@ -2734,9 +2737,12 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
         int p_idx = packet->sender_id;
         if (p_idx >= 0 && p_idx < room->player_count && *current_player == p_idx) {
             int hand_idx = packet->payload.req_replace_joker.hand_index;
+            int r = hand_idx / 15;
+            int c = hand_idx % 15;
             int meld_idx = packet->payload.req_replace_joker.table_meld_index;
-            if (hand_idx >= 0 && hand_idx < players[p_idx].tile_count && meld_idx >= 0 && meld_idx < table->meld_count) {
-                Tile tile = players[p_idx].hand[hand_idx];
+            if (r >= 0 && r < 2 && c >= 0 && c < 15 && meld_idx >= 0 && meld_idx < table->meld_count) {
+                Tile tile = boards[p_idx][r][c];
+                if (tile.id == -1) return; // Invalid tile
                 if (!players[p_idx].has_melded) {
                     NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
                     alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Trebuie sa te etalezi intai!");
@@ -2756,9 +2762,9 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
                         if (is_valid_run(table->melds[meld_idx].tiles, table->melds[meld_idx].count)) {
                             sort_run_with_flags(table->melds[meld_idx].tiles, table->melds[meld_idx].face_down, table->melds[meld_idx].tile_owner, table->melds[meld_idx].count);
                         }
-                        players[p_idx].hand[hand_idx] = joker_tile;
+                        boards[p_idx][r][c] = joker_tile;
                         players[p_idx].pending_jokers_to_place_face_down++;
-                        init_boards_from_players(players, room->player_count);
+                        sync_board_to_player(p_idx, &players[p_idx]);
                         for (int i = 0; i < room->player_count; i++) {
                             if (room->client_sockets[i] >= 0) {
                                 NetPacket sync_b; memset(&sync_b, 0, sizeof(NetPacket));
