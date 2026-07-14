@@ -919,78 +919,106 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
         int limit_draw = (draw_count > 7) ? 7 : draw_count;
         
         int cursor_color = ui_state->meld_selection_mode ? 12 : 7;
-        int border_pair = is_targeted ? cursor_color : 6;
-        if (is_preview_instance) border_pair = 12;
+        int border_pair = is_preview_instance ? 12 : 6;
+        
+        int render_limit = limit_draw;
+        if (is_targeted && !is_preview_instance) {
+            render_limit++;
+            if (ui_state->attach_side == 0) {
+                start_c -= 3;
+            }
+        }
+
         if (start_r > 13) {
             if (start_r == 14) {
-                attron(COLOR_PAIR(border_pair));
-                mvprintw(14, start_c, "┌");
-                for (int t = 0; t < limit_draw; t++) {
-                    if (t > 0) printw("┬");
+                move(14, start_c);
+                for (int t = 0; t < render_limit; t++) {
+                    bool is_highlight = (is_targeted && !is_preview_instance && ((ui_state->attach_side == 0 && t == 0) || (ui_state->attach_side == 1 && t == render_limit - 1)));
+                    int pair = is_highlight ? cursor_color : border_pair;
+                    attron(COLOR_PAIR(pair));
+                    if (t == 0) printw("┌");
+                    else printw("┬");
                     printw("──");
+                    if (t == render_limit - 1) printw("┐");
+                    attroff(COLOR_PAIR(pair));
                 }
-                printw("┐");
-                attroff(COLOR_PAIR(border_pair));
             }
             continue;
         }
 
-
-
         // Draw top border
-        attron(COLOR_PAIR(border_pair));
-        mvprintw(start_r, start_c, "┌");
-        for (int t = 0; t < limit_draw; t++) {
-            if (t > 0) printw("┬");
+        move(start_r, start_c);
+        for (int t = 0; t < render_limit; t++) {
+            bool is_highlight = (is_targeted && !is_preview_instance && ((ui_state->attach_side == 0 && t == 0) || (ui_state->attach_side == 1 && t == render_limit - 1)));
+            int pair = is_highlight ? cursor_color : border_pair;
+            attron(COLOR_PAIR(pair));
+            if (t == 0) printw("┌");
+            else printw("┬");
             printw("──");
+            if (t == render_limit - 1) printw("┐");
+            attroff(COLOR_PAIR(pair));
         }
-        printw("┐");
         
         // Draw middle row containing tile values
-        mvprintw(start_r + 1, start_c, "│");
-        attroff(COLOR_PAIR(border_pair));
-
-        for (int t = 0; t < limit_draw; t++) {
-            if (draw_count > 7 && t == 3) {
-                attron(COLOR_PAIR(6) | A_BOLD);
-                printw("..");
-                attroff(COLOR_PAIR(6) | A_BOLD);
+        move(start_r + 1, start_c);
+        for (int t = 0; t < render_limit; t++) {
+            bool is_highlight = (is_targeted && !is_preview_instance && ((ui_state->attach_side == 0 && t == 0) || (ui_state->attach_side == 1 && t == render_limit - 1)));
+            int pair = is_highlight ? cursor_color : border_pair;
+            
+            attron(COLOR_PAIR(pair));
+            if (t == 0) printw("│");
+            attroff(COLOR_PAIR(pair));
+            
+            if (is_highlight) {
+                attron(COLOR_PAIR(pair));
+                printw("  ");
+                attroff(COLOR_PAIR(pair));
             } else {
-                int actual_idx = t;
-                if (draw_count > 7 && t > 3) actual_idx = draw_count - (7 - t);
-                Tile tile = meld->tiles[actual_idx];
-                bool is_fd = meld->face_down[actual_idx];
-                
-                if (is_preview_instance) {
-                    attron(COLOR_PAIR(border_pair));
-                    printw("  ");
-                    attroff(COLOR_PAIR(border_pair));
-                } else if (is_fd) {
-                    attron(COLOR_PAIR(6) | A_DIM);
-                    printw("XX");
-                    attroff(COLOR_PAIR(6) | A_DIM);
+                int actual_t = (is_targeted && !is_preview_instance && ui_state->attach_side == 0) ? t - 1 : t;
+                if (draw_count > 7 && actual_t == 3) {
+                    attron(COLOR_PAIR(6) | A_BOLD);
+                    printw("..");
+                    attroff(COLOR_PAIR(6) | A_BOLD);
                 } else {
-                    int cp = (tile.number == 0) ? 5 : tile.color + 1;
-                    attron(COLOR_PAIR(cp) | A_BOLD);
-                    if (tile.number == 0) printw(":)");
-                    else printw("%2d", tile.number);
-                    attroff(COLOR_PAIR(cp) | A_BOLD);
+                    int actual_idx = actual_t;
+                    if (draw_count > 7 && actual_t > 3) actual_idx = draw_count - (7 - actual_t);
+                    Tile tile = meld->tiles[actual_idx];
+                    bool is_fd = meld->face_down[actual_idx];
+                    
+                    if (is_preview_instance) {
+                        attron(COLOR_PAIR(border_pair));
+                        printw("  ");
+                        attroff(COLOR_PAIR(border_pair));
+                    } else if (is_fd) {
+                        attron(COLOR_PAIR(6) | A_DIM);
+                        printw("XX");
+                        attroff(COLOR_PAIR(6) | A_DIM);
+                    } else {
+                        int cp = (tile.number == 0) ? 5 : tile.color + 1;
+                        attron(COLOR_PAIR(cp) | A_BOLD);
+                        if (tile.number == 0) printw(":)");
+                        else printw("%2d", tile.number);
+                        attroff(COLOR_PAIR(cp) | A_BOLD);
+                    }
                 }
             }
-            attron(COLOR_PAIR(border_pair));
+            attron(COLOR_PAIR(pair));
             printw("│");
-            attroff(COLOR_PAIR(border_pair));
+            attroff(COLOR_PAIR(pair));
         }
 
         // Draw bottom border
-        attron(COLOR_PAIR(border_pair));
-        mvprintw(start_r + 2, start_c, "└");
-        for (int t = 0; t < limit_draw; t++) {
-            if (t > 0) printw("┴");
+        move(start_r + 2, start_c);
+        for (int t = 0; t < render_limit; t++) {
+            bool is_highlight = (is_targeted && !is_preview_instance && ((ui_state->attach_side == 0 && t == 0) || (ui_state->attach_side == 1 && t == render_limit - 1)));
+            int pair = is_highlight ? cursor_color : border_pair;
+            attron(COLOR_PAIR(pair));
+            if (t == 0) printw("└");
+            else printw("┴");
             printw("──");
+            if (t == render_limit - 1) printw("┘");
+            attroff(COLOR_PAIR(pair));
         }
-        printw("┘");
-        attroff(COLOR_PAIR(border_pair));
 
 
     }
