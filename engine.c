@@ -71,6 +71,7 @@ void deal_hands(Deck *deck, Player players[], int num_players, int starting_play
         players[i].melded_this_turn = false; // Initializare G1
         players[i].pending_jokers_to_place_face_down = 0;
         players[i].drew_atu_this_turn = false;
+        players[i].had_under_3_tiles = false;
         
         // Restauram username-ul
         strncpy(players[i].username, saved_username, 11);
@@ -506,6 +507,8 @@ bool can_draw_from_discard(int discard_index, const Player *player, int turn_num
         if (discard_pile[discard_index].id == first_discard_tile_id) return false; // Prima carte blocata permanent
     }
     if (!player->has_melded && discard_index != discard_count - 1) return false; // Neetalat -> doar ultima carte
+    // Rupere din mijloc (nu ultima carte) necesita minim 4 piese pe tabla
+    if (discard_index != discard_count - 1 && player->tile_count < 4) return false;
     return true;
 }
 

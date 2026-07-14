@@ -990,9 +990,11 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
                         printw("  ");
                         attroff(COLOR_PAIR(border_pair));
                     } else if (is_fd) {
-                        attron(COLOR_PAIR(6) | A_DIM);
-                        printw("XX");
-                        attroff(COLOR_PAIR(6) | A_DIM);
+                        int cp = (tile.number == 0) ? 5 : tile.color + 1;
+                        attron(COLOR_PAIR(cp) | A_DIM);
+                        if (tile.number == 0) printw(":)");
+                        else printw("%2d", tile.number);
+                        attroff(COLOR_PAIR(cp) | A_DIM);
                     } else {
                         int cp = (tile.number == 0) ? 5 : tile.color + 1;
                         attron(COLOR_PAIR(cp) | A_BOLD);
@@ -2609,6 +2611,13 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
         int p_idx = packet->sender_id;
         bool can_discard = (players[p_idx].drew_deck_this_turn || players[p_idx].drew_from_discard_this_turn || (discard_count == 0 && players[p_idx].tile_count >= 15));
         if (p_idx >= 0 && p_idx < room->player_count && *current_player == p_idx && can_discard) {
+            // Validare: nu poti decarta daca ai Joly nefolosit (primit de la swap)
+            if (players[p_idx].pending_jokers_to_place_face_down > 0) {
+                NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
+                alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Trebuie sa folosesti Joly-ul primit intr-o formatie!");
+                net_send_packet(room->client_sockets[p_idx], &alert_pkt);
+                return;
+            }
             int idx = packet->payload.req_action.hand_index;
             int r = idx / 15; int c = idx % 15;
             if (boards[p_idx][r][c].id != -1) {
@@ -2616,7 +2625,12 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
                 
                 players[p_idx].drew_deck_this_turn = false;
                 players[p_idx].drew_from_discard_this_turn = false;
+                players[p_idx].melded_this_turn = false;
+                players[p_idx].pending_jokers_to_place_face_down = 0;
+                players[p_idx].had_under_3_tiles = false;
                 *current_player = (*current_player + 1) % room->player_count;
+                // Set had_under_3_tiles for next player
+                players[*current_player].had_under_3_tiles = (players[*current_player].tile_count <= 2);
                 
                 if (room->client_sockets[p_idx] >= 0) {
                     NetPacket sync_pkt;
@@ -2634,6 +2648,13 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
     } else if (packet->type == REQ_PLAY_MELDS) {
         int p_idx = packet->sender_id;
         if (p_idx >= 0 && p_idx < room->player_count && *current_player == p_idx) {
+            // Jucator cu <=2 piese la inceputul turei nu poate etala, doar lipeste
+            if (players[p_idx].had_under_3_tiles) {
+                NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
+                alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Cu <=2 piese pe tabla poti doar lipi, nu etala!");
+                net_send_packet(room->client_sockets[p_idx], &alert_pkt);
+                return;
+            }
             // Populate global selected_tiles array for the old validation function
             for (int r = 0; r < 2; r++) {
                 for (int c = 0; c < 15; c++) selected_tiles[p_idx][r][c] = 0;
@@ -2704,6 +2725,11 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
                 } else if (players[p_idx].drew_from_discard_this_turn && tile.id == players[p_idx].primary_discard_drawn_tile.id) {
                     NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
                     alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Nu poti lipi piesa din decartate!");
+                    net_send_packet(room->client_sockets[p_idx], &alert_pkt);
+                } else if (tile.number == 0 && table->melds[meld_idx].owner_id != p_idx) {
+                    // Joly nu se poate lipi la formatiile altor jucatori
+                    NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
+                    alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Joly nu se poate lipi la formatiile altor jucatori!");
                     net_send_packet(room->client_sockets[p_idx], &alert_pkt);
                 } else if (can_attach_tile_to_side(&table->melds[meld_idx], tile, side)) {
                     if (attach_tile_to_meld_side(table, meld_idx, tile, side, p_idx)) {
@@ -3362,6 +3388,7 @@ round_start:
                 players[current_player].drew_from_discard_this_turn = false;
                 players[current_player].drew_atu_this_turn = false;
                 players[current_player].pending_jokers_to_place_face_down = 0;
+                players[current_player].had_under_3_tiles = (players[current_player].tile_count <= 2);
                 
                 char log_msg[128];
                 snprintf(log_msg, sizeof(log_msg), "Tura %d. Jucator curent: %d (Timeout)", global_turn_number, current_player + 1);
@@ -4552,6 +4579,7 @@ round_start:
                                      players[current_player].drew_from_discard_this_turn = false;
                                      players[current_player].drew_atu_this_turn = false;
                                      players[current_player].pending_jokers_to_place_face_down = 0;
+                                     players[current_player].had_under_3_tiles = (players[current_player].tile_count <= 2);
                                      char log_msg[128];
                                      snprintf(log_msg, sizeof(log_msg), "Tura %d. Jucator curent: %d", global_turn_number, current_player + 1);
                                      log_event(log_msg);
@@ -4711,6 +4739,7 @@ round_start:
                                         players[current_player].drew_from_discard_this_turn = false;
                                         players[current_player].drew_atu_this_turn = false;
                                         players[current_player].pending_jokers_to_place_face_down = 0;
+                                        players[current_player].had_under_3_tiles = (players[current_player].tile_count <= 2);
                                         
                                         char log_msg[128];
                                         snprintf(log_msg, sizeof(log_msg), "Tura %d. Jucator curent: %d", global_turn_number, current_player + 1);
@@ -4863,6 +4892,7 @@ round_start:
                                 players[current_player].drew_from_discard_this_turn = false;
                                 players[current_player].drew_atu_this_turn = false;
                                 players[current_player].pending_jokers_to_place_face_down = 0;
+                                players[current_player].had_under_3_tiles = (players[current_player].tile_count <= 2);
                                 char log_msg[128];
                                 snprintf(log_msg, sizeof(log_msg), "Tura %d. Jucator curent: %d", global_turn_number, current_player + 1);
                                 log_event(log_msg);
