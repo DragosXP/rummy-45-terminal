@@ -554,7 +554,7 @@ void draw_header(const LocalClientState *state) {
                 if (state->phase == PHASE_DRAW) {
                     mvprintw(37, 5, "Este rândul tău, %s. Acțiune: Trage o piesă (de jos sau din decartate).                ", g_room.players[i].username);
                 } else {
-                    mvprintw(37, 5, "Este rândul tău, %s. Acțiune: Etalează, lipește sau decartează pentru a încheia tura.  ", g_room.players[i].username);
+                    mvprintw(37, 5, "Este rândul tău, %s. Acțiune: Etalează, lipește. Apasă 'D' pe o piesă din mână pt a decarta.", g_room.players[i].username);
                 }
             } else {
                 mvprintw(37, 5, "Este rândul lui %s, așteaptă-ți rândul...                                              ", g_room.players[i].username);
@@ -908,7 +908,7 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
             if (t > 0) printw("┬");
             printw("──");
         }
-        printw("┐ (%dp)", score);
+        printw("┐");
         
         // Draw middle row containing tile values
         mvprintw(start_r + 1, start_c, "│");
@@ -951,6 +951,11 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
         }
         printw("┘");
         attroff(COLOR_PAIR(border_pair));
+
+        // Draw score below
+        attron(A_BOLD);
+        mvprintw(start_r + 3, start_c, "[%d pct]", score);
+        attroff(A_BOLD);
     }
 }
 
@@ -2542,7 +2547,7 @@ main_menu:
         }
     }
 
-    if (player_count < 2 || player_count > MAX_PLAYERS) {
+    if (player_count < 1 || player_count > MAX_PLAYERS) {
         player_count = 4;
     }
 
@@ -3209,7 +3214,7 @@ round_start:
             quit_mode = 1;
             debug_progress = 0;
             continue;
-        } else if (ch == 'd' || ch == 'D') {
+        } else if (ch == 'w' || ch == 'W') {
             debug_progress = 1;
         } else if (ch == 'b' || ch == 'B') {
             if (debug_progress == 1) {
@@ -4344,6 +4349,72 @@ round_start:
                             held_c = -1;
                             sync_board_to_player(interact_p, active);
 
+                        }
+                    }
+                } else if (ch == 'd' || ch == 'D') {
+                    if (cursor_r >= 0 && cursor_r < 2 && cursor_c >= 0 && cursor_c < 15) {
+                        if (boards[interact_p][cursor_r][cursor_c].id != -1) {
+                            if (!validate_discard_rules(active)) {
+                                set_error("Eroare: Trebuie să joci piesa extrasă din teanc într-o formație nouă!");
+                            } else if (active->pending_jokers_to_place_face_down > 0) {
+                                set_error("Eroare: Trebuie să joci Jokerul recuperat într-o formație în această tură!");
+                            } else if (active->drew_atu_this_turn && boards[interact_p][cursor_r][cursor_c].id == atuu_tile.id) {
+                                set_error("Eroare: Nu poți închide/decarta cu Atuul luat!");
+                            } else if (active->drew_atu_this_turn && player_has_tile_id(interact_p, atuu_tile.id)) {
+                                set_error("Eroare: Trebuie să joci Atuul luat într-o formație pe masă!");
+                            } else {
+                                if (g_is_networked && !g_room.is_host) {
+                                    client_send_action_struct(ACTION_DISCARD, cursor_r, cursor_c, 0, 0);
+                                } else {
+                                    active->drew_from_discard_this_turn = false;
+                                    active->drew_atu_this_turn = false;
+                                    
+                                    if (discard_count == 0) {
+                                        first_discard_tile_id = boards[interact_p][cursor_r][cursor_c].id;
+                                    }
+                                    discard_pile[discard_count++] = boards[interact_p][cursor_r][cursor_c];
+                                    boards[interact_p][cursor_r][cursor_c].id = -1;
+                                    boards[interact_p][cursor_r][cursor_c].number = -1;
+                                    sync_board_to_player(interact_p, active);
+
+                                    if (active->tile_count == 0) {
+                                        show_end_game_screen(current_player, false, players, &table);
+                                    } else {
+                                        int save_r = (cursor_r >= 0) ? cursor_r : 0;
+                                        saved_board_r[interact_p] = save_r;
+                                        saved_board_c[interact_p] = cursor_c;
+
+                                        current_player = (current_player - 1 + player_count) % player_count;
+                                        action_start_time = time(NULL);
+                                        action_time_limit = (global_turn_number == 1) ? 60 : 25;
+                                        global_turn_number++;
+                                        players[current_player].melded_this_turn = false;
+                                        players[current_player].drew_from_discard_this_turn = false;
+                                        players[current_player].drew_atu_this_turn = false;
+                                        players[current_player].pending_jokers_to_place_face_down = 0;
+                                        
+                                        char log_msg[128];
+                                        snprintf(log_msg, sizeof(log_msg), "Tura %d. Jucator curent: %d", global_turn_number, current_player + 1);
+                                        log_event(log_msg);
+                                        
+                                        state = STATE_DRAW;
+                                        select_deck = true;
+                                        meld_selection_mode = false;
+                                        is_holding = false;
+                                        held_r = -1;
+                                        held_c = -1;
+                                        for (int p = 0; p < player_count; p++) {
+                                            for (int r = 0; r < 2; r++) {
+                                                for (int c = 0; c < 15; c++) {
+                                                    selected_tiles[p][r][c] = false;
+                                                }
+                                            }
+                                        }
+                                        cursor_r = saved_board_r[interact_p];
+                                        cursor_c = saved_board_c[interact_p];
+                                    }
+                                }
+                            }
                         }
                     }
                 } else if (ch == 'x' || ch == 'X') {
