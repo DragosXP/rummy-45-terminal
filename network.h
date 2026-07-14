@@ -22,7 +22,9 @@ typedef enum {
     REQ_ADD_LIPITURA,    // Lipirea unei piese la o formatie de pe masa
     REQ_DISCARD_TILE,    // Decartare (semnifica si terminarea turei)
     REQ_REPLACE_JOKER,   // Jucatorul inlocuieste un Joker de pe masa
+    REQ_UNDO_JOKER_REPLACE, // Jucatorul anuleaza inlocuirea Jokerului
     REQ_DEBUG_DD,        // Inlocuieste mana jucatorului cu un set fix (debug)
+    REQ_DEBUG_D1,        // Inlocuieste starea intregului joc pentru testarea tuturor functiilor (debug)
     // ---- SERVER -> CLIENT (Syncs) ----
     SYNC_GAME_STATE,     // Cine este la rand, in ce faza este tura, scoruri
     SYNC_PUBLIC_BOARD,   // Masa comuna (Table), pachetul de decartare
@@ -51,6 +53,8 @@ typedef enum { SRC_DECK, SRC_DISCARD } DrawSource;
 typedef struct {
     DrawSource source;
     int discard_index; 
+    int row;
+    int col;
 } PayloadReqDraw;
 
 typedef struct {
@@ -80,6 +84,8 @@ typedef struct {
     int active_player_id;
     TurnPhase current_phase;
     int player_scores[NET_MAX_PLAYERS];
+    int player_tile_counts[NET_MAX_PLAYERS];
+    bool player_had_under3[NET_MAX_PLAYERS];
 } PayloadSyncGameState;
 
 typedef struct {
@@ -95,6 +101,9 @@ typedef struct {
     Tile private_board[2][15];
     int tile_count;
     bool has_melded;
+    int board_stack_count;
+    Tile board_stack[106];
+    int pending_jokers;
 } PayloadSyncPrivateHand;
 
 typedef enum { ZONE_HAND, ZONE_BOARD, ZONE_DISCARD } CursorZone;
@@ -182,11 +191,16 @@ typedef struct {
     Tile private_board[2][15];
     int tile_count;
     bool has_melded;
+    int board_stack_count;
+    Tile board_stack[106];
+    int pending_jokers;
     
     Tile atuu_tile;
     bool atu_taken;
     
     char last_msg[128];
+    int player_tile_counts[NET_MAX_PLAYERS];
+    bool had_under_3_tiles;
 } LocalClientState;
 
 // --- Network Functions ---

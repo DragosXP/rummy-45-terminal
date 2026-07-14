@@ -450,6 +450,8 @@ void sort_run_with_flags(Tile tiles[], bool face_down[], int tile_owner[], int c
             Tile joker = tiles[i];
             bool joker_fd = face_down[i];
             int joker_own = tile_owner[i];
+            int orig_idx = i;
+            
             for (int k = i; k < count - 1; k++) {
                 tiles[k] = tiles[k+1];
                 face_down[k] = face_down[k+1];
@@ -457,12 +459,21 @@ void sort_run_with_flags(Tile tiles[], bool face_down[], int tile_owner[], int c
                 sort_vals[k] = sort_vals[k+1];
             }
             int insert_pos = count - 1;
+            bool found_gap = false;
             for (int k = 0; k < count - 2; k++) {
                 if (sort_vals[k] != -1 && sort_vals[k+1] != -1) {
                     if (sort_vals[k+1] - sort_vals[k] > 1) {
                         insert_pos = k + 1;
+                        found_gap = true;
                         break;
                     }
+                }
+            }
+            if (!found_gap) {
+                if (orig_idx == 0) {
+                    insert_pos = 0;
+                } else {
+                    insert_pos = count - 1;
                 }
             }
             for (int k = count - 1; k > insert_pos; k--) {
@@ -540,44 +551,64 @@ int calculate_meld_points(Tile tiles[], int count) {
     }
 
     if (is_valid_run(tiles, count)) {
-        bool has_one = false;
-        bool has_thirteen = false;
-        for (int i = 0; i < count; i++) {
-            if (tiles[i].number == 1) has_one = true;
-            if (tiles[i].number == 13) has_thirteen = true;
-        }
-        bool one_is_high = (has_one && has_thirteen);
-
-        int resolved[14] = {0};
+        int first_real_idx = -1;
         for (int i = 0; i < count; i++) {
             if (tiles[i].number != 0) {
-                resolved[i] = tiles[i].number;
-                if (resolved[i] == 1 && one_is_high) resolved[i] = 14;
+                first_real_idx = i;
+                break;
             }
         }
-        
-        for (int i = 0; i < count; i++) {
-            if (resolved[i] == 0) {
-                for (int j = i + 1; j < count; j++) {
-                    if (resolved[j] != 0) {
-                        resolved[i] = resolved[j] - (j - i);
-                        break;
-                    }
+        if (first_real_idx == -1) return 0;
+
+        int candidates[2];
+        int candidate_count = 0;
+
+        if (tiles[first_real_idx].number == 1) {
+            candidates[candidate_count++] = 1 - first_real_idx;
+            candidates[candidate_count++] = 14 - first_real_idx;
+        } else {
+            candidates[candidate_count++] = tiles[first_real_idx].number - first_real_idx;
+        }
+
+        int valid_v0 = -1;
+        for (int c = 0; c < candidate_count; c++) {
+            int v0 = candidates[c];
+            bool possible = true;
+
+            for (int i = 0; i < count; i++) {
+                int val = v0 + i;
+                if (val < 1 || val > 14) {
+                    possible = false;
+                    break;
                 }
-                if (resolved[i] == 0) {
-                    for (int j = i - 1; j >= 0; j--) {
-                        if (resolved[j] != 0) {
-                            resolved[i] = resolved[j] + (i - j);
+
+                if (tiles[i].number != 0) {
+                    if (tiles[i].number == 1) {
+                        if (val != 1 && val != 14) {
+                            possible = false;
+                            break;
+                        }
+                    } else {
+                        if (val != tiles[i].number) {
+                            possible = false;
                             break;
                         }
                     }
                 }
             }
+
+            if (possible) {
+                valid_v0 = v0;
+                break;
+            }
         }
+
+        if (valid_v0 == -1) return 0;
 
         int total = 0;
         for (int i = 0; i < count; i++) {
-            if (resolved[i] >= 10) total += 10;
+            int resolved_val = valid_v0 + i;
+            if (resolved_val >= 10) total += 10;
             else total += 5;
         }
         return total;
@@ -587,24 +618,59 @@ int calculate_meld_points(Tile tiles[], int count) {
 
 bool check_initial_meld(Tile tiles[], int count) {
     if (!is_valid_meld(tiles, count)) return false;
-    if (!is_valid_run(tiles, count)) return false;
+    
+    // Must be either a run or a group of ones
+    bool is_run = is_valid_run(tiles, count);
+    bool is_ones = false;
+    if (is_valid_group(tiles, count)) {
+        for (int i = 0; i < count; i++) {
+            if (tiles[i].number != 0) {
+                if (tiles[i].number == 1) {
+                    is_ones = true;
+                }
+                break;
+            }
+        }
+    }
+    
+    if (!is_run && !is_ones) return false;
     return calculate_meld_points(tiles, count) >= 45;
 }
 
 bool check_initial_melds(Meld staged[], int meld_count) {
     int total = 0;
     bool has_run = false;
+    bool only_groups_of_ones = true;
 
     for (int m = 0; m < meld_count; m++) {
         if (!is_valid_meld(staged[m].tiles, staged[m].count)) return false;
         
         if (is_valid_run(staged[m].tiles, staged[m].count)) {
             has_run = true;
+            only_groups_of_ones = false;
+        } else {
+            // It's a group
+            bool is_ones = false;
+            for (int i = 0; i < staged[m].count; i++) {
+                if (staged[m].tiles[i].number != 0) {
+                    if (staged[m].tiles[i].number == 1) {
+                        is_ones = true;
+                    }
+                    break;
+                }
+            }
+            if (!is_ones) {
+                only_groups_of_ones = false;
+            }
         }
         
         total += calculate_meld_points(staged[m].tiles, staged[m].count);
     }
-    return (total >= 45 && has_run);
+    
+    if (total < 45) return false;
+    if (has_run) return true;
+    if (only_groups_of_ones && meld_count > 0) return true;
+    return false;
 }
 
 bool has_player_won(Player *player) {
@@ -711,6 +777,7 @@ bool attempt_auto_meld_from_discard(Player *player, Table *table, int player_idx
     if (player->has_melded) return false;
     if (global_turn_number <= player_count) return false; // Nu se etaleaza in prima tura (G2)
     if (discard_count <= 0) return false;
+    if (!can_draw_from_discard(discard_count - 1, player, global_turn_number)) return false;
     
     Tile candidate = discard_pile[discard_count - 1];
     Tile temp_hand[21];
