@@ -157,19 +157,13 @@ bool net_receive_packet(int socket, NetPacket *packet) {
     
     size_t total_size = sizeof(NetPacket);
     
-    // Verificam daca avem un pachet intreg folosind PEEK (non-blocking)
-    ssize_t received = recv(socket, packet, total_size, MSG_PEEK);
-    if (received < (ssize_t)total_size) {
-        return false; // Nu avem pachet complet inca
-    }
-    
-    // Blocking pentru a consuma exact un pachet (suntem siguri ca exista datorita PEEK)
+    // Blocking pentru a consuma exact un pachet intreg (asteapta pana sosesc toti bytes-ii)
     set_blocking(socket);
     size_t total_received = 0;
     char *buf = (char *)packet;
     
     while (total_received < total_size) {
-        received = recv(socket, buf + total_received, total_size - total_received, 0);
+        ssize_t received = recv(socket, buf + total_received, total_size - total_received, 0);
         if (received <= 0) {
             set_nonblocking(socket);
             return false;

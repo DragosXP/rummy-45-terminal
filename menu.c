@@ -365,12 +365,13 @@ bool show_create_room_lobby(RoomState *room, AccountFile *af, const char *host_u
     }
     
     // Generam cod alfanumeric de 6 caractere (litere mari si cifre)
-    srand(time(NULL));
-    const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    for (int i = 0; i < 6; i++) {
-        room->room_code[i] = charset[rand() % 36];
-    }
-    room->room_code[6] = '\0';
+    // srand(time(NULL));
+    // const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    // for (int i = 0; i < 6; i++) {
+    //     room->room_code[i] = charset[rand() % 36];
+    // }
+    // room->room_code[6] = '\0';
+    strcpy(room->room_code, "000000");
 
     // Pornim serverul UDP de discovery pentru acest cod
     start_udp_discovery(room->room_code);
@@ -622,6 +623,11 @@ bool show_join_room(RoomState *room, AccountFile *af, const char *username) {
             room->players[room->local_player_index].total_score = score;
             room->players[room->local_player_index].connected = true;
             
+            // Setam un timeout pentru ca getch() sa nu blocheze complet bucla
+            // si sa putem citi pachetele de retea asincron
+            halfdelay(2);
+
+            
             // Lobby loop ca client
             while (!room->game_started) {
                 erase();
@@ -661,6 +667,7 @@ bool show_join_room(RoomState *room, AccountFile *af, const char *username) {
                             // Daca countdown este activ
                             if (room->countdown > 0) {
                                 room->game_started = true;
+                                refresh(); // Forteaza refresh conform cerintei
                                 show_countdown(room);
                                 return true;
                             }

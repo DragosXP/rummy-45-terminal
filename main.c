@@ -1022,7 +1022,7 @@ void draw_deck_piles(const LocalClientState *state, const LocalUIState *ui_state
 
     int deck_pile_sizes[20] = {0};
     int remaining = state->deck_remaining;
-    for (int i = 0; i < num_piles && remaining > 0; i++) {
+    for (int i = num_piles - 1; i >= 0 && remaining > 0; i--) {
         deck_pile_sizes[i] = (remaining > 7) ? 7 : remaining;
         remaining -= deck_pile_sizes[i];
     }
@@ -2250,8 +2250,12 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
         if (p_idx >= 0 && p_idx < room->player_count && *current_player == p_idx && !players[p_idx].drew_from_discard_this_turn && !players[p_idx].drew_deck_this_turn) {
             if (packet->payload.req_draw.source == SRC_DECK) {
                 if (deck->size > 0) {
-                    Tile t = deck->tiles[--deck->size];
+                    Tile t = deck->tiles[1];
+                    for (int i = 1; i < deck->size - 1; i++) deck->tiles[i] = deck->tiles[i + 1];
+                    deck->size--;
+                    
                     add_tile_to_board(p_idx, t);
+                    sync_board_to_player(p_idx, &players[p_idx]);
                     players[p_idx].drew_deck_this_turn = true;
                 }
             } else if (packet->payload.req_draw.source == SRC_DISCARD) {
@@ -2262,6 +2266,7 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
                     if (d_idx == discard_count - 1) {
                         Tile t = discard_pile[--discard_count];
                         add_tile_to_board(p_idx, t);
+                        sync_board_to_player(p_idx, &players[p_idx]);
                         players[p_idx].drew_from_discard_this_turn = true;
                     }
                 }
@@ -2283,7 +2288,8 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
         }
     } else if (packet->type == REQ_DISCARD_TILE) {
         int p_idx = packet->sender_id;
-        if (p_idx >= 0 && p_idx < room->player_count && *current_player == p_idx && (players[p_idx].drew_deck_this_turn || players[p_idx].drew_from_discard_this_turn)) {
+        bool can_discard = (players[p_idx].drew_deck_this_turn || players[p_idx].drew_from_discard_this_turn || (discard_count == 0 && players[p_idx].tile_count >= 15));
+        if (p_idx >= 0 && p_idx < room->player_count && *current_player == p_idx && can_discard) {
             int idx = packet->payload.req_action.hand_index;
             int r = idx / 15; int c = idx % 15;
             if (boards[p_idx][r][c].id != -1) {
@@ -2540,6 +2546,7 @@ main_menu:
     current_player = rand() % player_count;
 
 round_start:
+    if (!g_is_networked || g_room.is_host) {
     init_deck(&deck);
     shuffle_deck(&deck);
     deal_hands(&deck, players, player_count, current_player);
@@ -2598,20 +2605,41 @@ round_start:
     discard_count = 0;
     first_discard_tile_id = -1; // Blocat la prima decartare
 
-    // Initialize deck pile sizes
-    {
-        int num_piles = 15 - 2 * player_count;
-        if (num_piles < 1) num_piles = 1;
-        int rem = deck.size;
-        for (int i = 0; i < num_piles; i++) {
-            deck_pile_sizes[i] = rem / (num_piles - i);
-            rem -= deck_pile_sizes[i];
+        // Initialize deck pile sizes
+        {
+            int num_piles = 15 - 2 * player_count;
+            if (num_piles < 1) num_piles = 1;
+            int rem = deck.size;
+            for (int i = 0; i < num_piles; i++) {
+                deck_pile_sizes[i] = rem / (num_piles - i);
+                rem -= deck_pile_sizes[i];
+            }
         }
+    } else {
+        // Guest setup: clean local buffers, await sync
+        memset(&table, 0, sizeof(table));
+        discard_count = 0;
+        atu_taken = false;
+        memset(boards[g_local_player_index], 0, sizeof(Tile) * 2 * 15);
     }
 
     
     if (g_is_networked && g_room.is_host) {
         server_broadcast_sync(&g_room, current_player, &table, &deck);
+        
+        // Host MUST send SYNC_PRIVATE_HAND to each client so they get their cards!
+        for (int i = 1; i < player_count; i++) {
+            if (g_room.client_sockets[i] >= 0) {
+                NetPacket sync_pkt;
+                memset(&sync_pkt, 0, sizeof(NetPacket));
+                sync_pkt.type = SYNC_PRIVATE_HAND;
+                sync_pkt.sender_id = 0;
+                sync_pkt.payload.sync_hand.tile_count = players[i].tile_count;
+                sync_pkt.payload.sync_hand.has_melded = players[i].has_melded;
+                memcpy(sync_pkt.payload.sync_hand.private_board, boards[i], sizeof(Tile) * 2 * 15);
+                net_send_packet(g_room.client_sockets[i], &sync_pkt);
+            }
+        }
     }
     // Faza 3 Dumb Client Network Loop
     LocalClientState current_state = {0};

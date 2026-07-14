@@ -90,10 +90,18 @@ void deal_hands(Deck *deck, Player players[], int num_players, int starting_play
 }
 
 void draw_from_deck(Deck *deck, Player *player) {
-    if (deck->size > 0 && player->tile_count < 20) {
-        deck->size--;
-        player->hand[player->tile_count] = deck->tiles[deck->size];
+    if (deck->size > 1 && player->tile_count < 20) {
+        player->hand[player->tile_count] = deck->tiles[1];
         player->tile_count++;
+        
+        for (int i = 1; i < deck->size - 1; i++) {
+            deck->tiles[i] = deck->tiles[i + 1];
+        }
+        deck->size--;
+    } else if (deck->size == 1 && player->tile_count < 20) {
+        player->hand[player->tile_count] = deck->tiles[0];
+        player->tile_count++;
+        deck->size--;
     }
 }
 
