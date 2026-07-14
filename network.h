@@ -29,7 +29,8 @@ typedef enum {
     SYNC_PRIVATE_HAND,   // Mana specifica a clientului
     SYNC_MSG_ALERT,      // Mesaje de eroare sau info
     SYNC_JOIN_RESPONSE,  // Raspuns la conectare (ID-ul alocat sau respingere)
-    SYNC_LOBBY_STATE     // Lista de jucatori din Lobby
+    SYNC_LOBBY_STATE,    // Lista de jucatori din Lobby
+    SYNC_GAME_END        // Final de joc cu scoruri finale si detalii
 } PacketType;
 
 // --- Payload-uri Client -> Server ---
@@ -118,6 +119,16 @@ typedef struct {
     int countdown; // daca > 0, jocul e pe cale sa inceapa
 } PayloadSyncLobby;
 
+typedef struct {
+    int winner_idx;
+    bool deck_empty;
+    bool winner_closed_double;
+    int final_scores[NET_MAX_PLAYERS];
+    int table_points[NET_MAX_PLAYERS];
+    int hand_penalties[NET_MAX_PLAYERS];
+    bool has_atu[NET_MAX_PLAYERS];
+} PayloadSyncGameEnd;
+
 // Pachetul Universal trimis prin socket
 typedef struct {
     PacketType type;
@@ -138,6 +149,7 @@ typedef struct {
         PayloadSyncPrivateHand sync_hand;
         PayloadSyncJoin sync_join;
         PayloadSyncLobby sync_lobby;
+        PayloadSyncGameEnd sync_end;
         char sync_msg[128];
     } payload;
 } NetPacket;

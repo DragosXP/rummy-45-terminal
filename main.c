@@ -585,13 +585,13 @@ bool attach_tile_to_meld_side(Table *table, int meld_idx, Tile tile, int side, i
                     meld->tile_owner[i] = meld->tile_owner[i - 1];
                 }
                 meld->tiles[0] = tile;
-                meld->face_down[0] = true; // Attached tile is placed face down!
+                meld->face_down[0] = false; // Attached tile is placed face up to retain color
                 meld->tile_owner[0] = player_idx;
                 meld->count++;
             } else {
                 // Append to end (RIGHT)
                 meld->tiles[meld->count] = tile;
-                meld->face_down[meld->count] = true; // Attached tile is placed face down!
+                meld->face_down[meld->count] = false; // Attached tile is placed face up to retain color
                 meld->tile_owner[meld->count] = player_idx;
                 meld->count++;
             }
@@ -1503,6 +1503,13 @@ int play_selected_meld(int player_idx, Player *player, Table *table) {
     for (int i = 0; i < staged_count; i++) {
         if (!is_valid_meld(staged[i].tiles, staged[i].count)) {
             return -3;
+        }
+    }
+
+    // Regula de etalare initiala: prima coborare a jucatorului trebuie sa aiba >= 45 pct si cel putin o suita
+    if (!player->has_melded) {
+        if (!check_initial_melds(staged, staged_count)) {
+            return -2;
         }
     }
 
@@ -2459,7 +2466,7 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
     }
 }
 
-void server_broadcast_sync(RoomState *room, int current_player, Table *table, Deck *deck) {
+void server_broadcast_sync(RoomState *room, int current_player, Table *table, Deck *deck, Player players[]) {
     if (!g_is_networked || !room->is_host) return;
     
     NetPacket pkt;
@@ -2469,7 +2476,14 @@ void server_broadcast_sync(RoomState *room, int current_player, Table *table, De
     pkt.type = SYNC_GAME_STATE;
     pkt.sender_id = 0;
     pkt.payload.sync_state.active_player_id = current_player;
-    pkt.payload.sync_state.current_phase = PHASE_DRAW; // Or calculate based on state
+    if (players[current_player].drew_deck_this_turn || players[current_player].drew_from_discard_this_turn) {
+        pkt.payload.sync_state.current_phase = PHASE_PLAY;
+    } else {
+        pkt.payload.sync_state.current_phase = PHASE_DRAW;
+    }
+    for (int i = 0; i < room->player_count; i++) {
+        pkt.payload.sync_state.player_scores[i] = players[i].score;
+    }
     
     for (int i = 1; i < room->player_count; i++) {
         if (room->client_sockets[i] >= 0) {
@@ -2495,6 +2509,113 @@ void server_broadcast_sync(RoomState *room, int current_player, Table *table, De
             net_send_packet(room->client_sockets[i], &pkt);
         }
     }
+}
+
+void server_full_sync(RoomState *room, int current_player, Table *table, Deck *deck, Player players[], Tile boards[NET_MAX_PLAYERS][2][15]) {
+    server_broadcast_sync(room, current_player, table, deck, players);
+    
+    for (int i = 1; i < room->player_count; i++) {
+        if (room->client_sockets[i] >= 0) {
+            NetPacket sync_pkt;
+            memset(&sync_pkt, 0, sizeof(NetPacket));
+            sync_pkt.type = SYNC_PRIVATE_HAND;
+            sync_pkt.sender_id = 0;
+            sync_pkt.payload.sync_hand.tile_count = players[i].tile_count;
+            sync_pkt.payload.sync_hand.has_melded = players[i].has_melded;
+            memcpy(sync_pkt.payload.sync_hand.private_board, boards[i], sizeof(Tile) * 2 * 15);
+            net_send_packet(room->client_sockets[i], &sync_pkt);
+        }
+    }
+}
+
+void handle_server_game_over(RoomState *room, int winner_idx, bool deck_empty, Player players[], Table *table) {
+    int final_scores[MAX_PLAYERS] = {0};
+    int table_points[MAX_PLAYERS] = {0};
+    int hand_penalties[MAX_PLAYERS] = {0};
+    bool has_atu[MAX_PLAYERS] = {false};
+    
+    bool is_joc_dublu = (atuu_tile.number == 1 || atuu_tile.number == 0);
+    bool winner_closed_double = false;
+    
+    if (!deck_empty && winner_idx != -1 && discard_count > 0) {
+        Tile closing_tile = discard_pile[discard_count - 1];
+        winner_closed_double = (closing_tile.number == 1 || closing_tile.number == 0);
+    }
+    
+    for (int p = 0; p < room->player_count; p++) {
+        has_atu[p] = (p == initial_atu_owner);
+        
+        if (!players[p].has_melded) {
+            int base = -100;
+            if (has_atu[p]) {
+                base += 50;
+            }
+            if (is_joc_dublu) {
+                base *= 2;
+            }
+            final_scores[p] = base;
+        } else {
+            int t_pts = 0;
+            for (int m = 0; m < table->meld_count; m++) {
+                Meld *meld = &table->melds[m];
+                for (int t = 0; t < meld->count; t++) {
+                    if (meld->tile_owner[t] == p) {
+                        int num = meld->tiles[t].number;
+                        if (num == 0) t_pts += 50;
+                        else if (num == 1) t_pts += 25;
+                        else if (num >= 10) t_pts += 10;
+                        else t_pts += 5;
+                    }
+                }
+            }
+            table_points[p] = t_pts;
+            hand_penalties[p] = calculate_hand_points(&players[p]);
+            
+            int base_score = t_pts - hand_penalties[p];
+            if (!deck_empty && p == winner_idx) {
+                base_score += 50;
+            }
+            if (has_atu[p]) {
+                base_score += 50;
+            }
+            
+            int multiplier = 1;
+            if (is_joc_dublu) multiplier *= 2;
+            if (!deck_empty && p == winner_idx && winner_closed_double) multiplier *= 2;
+            
+            final_scores[p] = base_score * multiplier;
+        }
+    }
+    
+    for (int i = 0; i < room->player_count; i++) {
+        if (strlen(players[i].username) > 0) {
+            update_account_score(&g_accounts, players[i].username, final_scores[i]);
+        }
+    }
+    
+    NetPacket end_pkt;
+    memset(&end_pkt, 0, sizeof(NetPacket));
+    end_pkt.type = SYNC_GAME_END;
+    end_pkt.sender_id = 0;
+    end_pkt.payload.sync_end.winner_idx = winner_idx;
+    end_pkt.payload.sync_end.deck_empty = deck_empty;
+    end_pkt.payload.sync_end.winner_closed_double = winner_closed_double;
+    for (int i = 0; i < room->player_count; i++) {
+        end_pkt.payload.sync_end.final_scores[i] = final_scores[i];
+        end_pkt.payload.sync_end.table_points[i] = table_points[i];
+        end_pkt.payload.sync_end.hand_penalties[i] = hand_penalties[i];
+        end_pkt.payload.sync_end.has_atu[i] = has_atu[i];
+    }
+    
+    for (int i = 1; i < room->player_count; i++) {
+        if (room->client_sockets[i] >= 0) {
+            net_send_packet(room->client_sockets[i], &end_pkt);
+        }
+    }
+    
+    show_end_game_screen_client(winner_idx, deck_empty, winner_closed_double,
+                                final_scores, table_points, hand_penalties, has_atu,
+                                players);
 }
 // ========== SERVER GATEKEEPER ==========
 void server_process_packet(RoomState *room, NetPacket *packet, Player players[], Tile boards[NET_MAX_PLAYERS][2][15], Table *table, Deck *deck, int *current_player) {
@@ -2579,39 +2700,37 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
                     sync_board_to_player(p_idx, &players[p_idx]);
                     players[p_idx].drew_deck_this_turn = true;
                 }
+                if (deck->size == 0) {
+                    handle_server_game_over(room, -1, true, players, table);
+                    return;
+                }
             } else if (packet->payload.req_draw.source == SRC_DISCARD) {
                 int d_idx = packet->payload.req_draw.discard_index;
                 if (d_idx >= 0 && d_idx < discard_count) {
-                    // Logic to draw from discard (in Rummy 45 usually you take the last one or multiple)
-                    // For simplicity let's take the top tile (d_idx should be discard_count - 1)
-                    if (d_idx == discard_count - 1) {
-                        Tile t = discard_pile[--discard_count];
-                        add_tile_to_board(p_idx, t);
-                        sync_board_to_player(p_idx, &players[p_idx]);
-                        players[p_idx].drew_from_discard_this_turn = true;
+                    if (!can_draw_from_discard(d_idx, &players[p_idx], global_turn_number)) {
+                        NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
+                        alert_pkt.type = SYNC_MSG_ALERT;
+                        strcpy(alert_pkt.payload.sync_msg, "Eroare: Nu poți lua/rupe această carte din decartate!");
+                        net_send_packet(room->client_sockets[p_idx], &alert_pkt);
+                        return;
                     }
+                    int num_tiles_to_take = discard_count - d_idx;
+                    for (int i = 0; i < num_tiles_to_take; i++) {
+                        Tile t = discard_pile[d_idx + i];
+                        add_tile_to_board(p_idx, t);
+                    }
+                    players[p_idx].primary_discard_drawn_tile = discard_pile[d_idx];
+                    discard_count = d_idx;
+                    sync_board_to_player(p_idx, &players[p_idx]);
+                    players[p_idx].drew_from_discard_this_turn = true;
                 }
             }
-            
-            // Sync private hand
-            if (room->client_sockets[p_idx] >= 0) {
-                NetPacket sync_pkt;
-                memset(&sync_pkt, 0, sizeof(NetPacket));
-                sync_pkt.type = SYNC_PRIVATE_HAND;
-                sync_pkt.sender_id = 0;
-                sync_pkt.payload.sync_hand.tile_count = players[p_idx].tile_count;
-                sync_pkt.payload.sync_hand.has_melded = players[p_idx].has_melded;
-                memcpy(sync_pkt.payload.sync_hand.private_board, boards[p_idx], sizeof(Tile) * 2 * 15);
-                net_send_packet(room->client_sockets[p_idx], &sync_pkt);
-            }
-            // Broadast game state
-            server_broadcast_sync(room, *current_player, table, deck);
+            server_full_sync(room, *current_player, table, deck, players, boards);
         }
     } else if (packet->type == REQ_DISCARD_TILE) {
         int p_idx = packet->sender_id;
         bool can_discard = (players[p_idx].drew_deck_this_turn || players[p_idx].drew_from_discard_this_turn || (discard_count == 0 && players[p_idx].tile_count >= 15));
         if (p_idx >= 0 && p_idx < room->player_count && *current_player == p_idx && can_discard) {
-            // Validare: nu poti decarta daca ai Joly nefolosit (primit de la swap)
             if (players[p_idx].pending_jokers_to_place_face_down > 0) {
                 NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
                 alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Trebuie sa folosesti Joly-ul primit intr-o formatie!");
@@ -2623,39 +2742,32 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
             if (boards[p_idx][r][c].id != -1) {
                 discard_tile_from_board(p_idx, &players[p_idx], r, c);
                 
+                if (players[p_idx].tile_count == 0) {
+                    handle_server_game_over(room, p_idx, false, players, table);
+                    return;
+                }
+                
                 players[p_idx].drew_deck_this_turn = false;
                 players[p_idx].drew_from_discard_this_turn = false;
                 players[p_idx].melded_this_turn = false;
                 players[p_idx].pending_jokers_to_place_face_down = 0;
                 players[p_idx].had_under_3_tiles = false;
                 *current_player = (*current_player + 1) % room->player_count;
-                // Set had_under_3_tiles for next player
                 players[*current_player].had_under_3_tiles = (players[*current_player].tile_count <= 2);
+                global_turn_number++;
                 
-                if (room->client_sockets[p_idx] >= 0) {
-                    NetPacket sync_pkt;
-                    memset(&sync_pkt, 0, sizeof(NetPacket));
-                    sync_pkt.type = SYNC_PRIVATE_HAND;
-                    sync_pkt.sender_id = 0;
-                    sync_pkt.payload.sync_hand.tile_count = players[p_idx].tile_count;
-                    sync_pkt.payload.sync_hand.has_melded = players[p_idx].has_melded;
-                    memcpy(sync_pkt.payload.sync_hand.private_board, boards[p_idx], sizeof(Tile) * 2 * 15);
-                    net_send_packet(room->client_sockets[p_idx], &sync_pkt);
-                }
-                server_broadcast_sync(room, *current_player, table, deck);
+                server_full_sync(room, *current_player, table, deck, players, boards);
             }
         }
     } else if (packet->type == REQ_PLAY_MELDS) {
         int p_idx = packet->sender_id;
         if (p_idx >= 0 && p_idx < room->player_count && *current_player == p_idx) {
-            // Jucator cu <=2 piese la inceputul turei nu poate etala, doar lipeste
             if (players[p_idx].had_under_3_tiles) {
                 NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
                 alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Cu <=2 piese pe tabla poti doar lipi, nu etala!");
                 net_send_packet(room->client_sockets[p_idx], &alert_pkt);
                 return;
             }
-            // Populate global selected_tiles array for the old validation function
             for (int r = 0; r < 2; r++) {
                 for (int c = 0; c < 15; c++) selected_tiles[p_idx][r][c] = 0;
             }
@@ -2666,27 +2778,14 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
                 selected_tiles[p_idx][r][c] = i + 1;
             }
             
-            // clear global error just in case
             global_has_error = false;
-            
             int res = play_selected_meld(p_idx, &players[p_idx], table);
             
             if (res >= 0) {
-                // Success! Sync hand and board!
-                if (room->client_sockets[p_idx] >= 0) {
-                    NetPacket sync_pkt;
-                    memset(&sync_pkt, 0, sizeof(NetPacket));
-                    sync_pkt.type = SYNC_PRIVATE_HAND;
-                    sync_pkt.sender_id = 0;
-                    sync_pkt.payload.sync_hand.tile_count = players[p_idx].tile_count;
-                    sync_pkt.payload.sync_hand.has_melded = players[p_idx].has_melded;
-                    memcpy(sync_pkt.payload.sync_hand.private_board, boards[p_idx], sizeof(Tile) * 2 * 15);
-                    net_send_packet(room->client_sockets[p_idx], &sync_pkt);
-                }
-                server_broadcast_sync(room, *current_player, table, deck);
+                server_full_sync(room, *current_player, table, deck, players, boards);
             } else {
                 if (res == -1) set_error("Selecție invalidă! O formație are <3 piese sau piese invalide.");
-                else if (res == -2) set_error("Prima etalare invalidă! (min. 45 pct și cel puțin o suită sau o terță de 1)");
+                else if (res == -2) set_error("Prima etalare invalidă! (min. 45 pct și cel puțin o suită)");
                 else if (res == -3) set_error("Formație invalidă! Grupurile/suitele trebuie să respecte regulile.");
                 else if (res == -4) set_error("Ai etalat deja în această tură! Trebuie să aștepți tura următoare.");
                 else if (res == -5) set_error("Nu poți etala în prima ta tură! Așteaptă să joace toți jucătorii o dată.");
@@ -2700,14 +2799,11 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
                     net_send_packet(room->client_sockets[p_idx], &alert_pkt);
                 }
             }
-            
-            // Clear selected_tiles
             for (int r = 0; r < 2; r++) {
                 for (int c = 0; c < 15; c++) selected_tiles[p_idx][r][c] = 0;
             }
         }
     } else if (packet->type == REQ_ADD_LIPITURA) {
-        // Lipitura
         int p_idx = packet->sender_id;
         if (p_idx >= 0 && p_idx < room->player_count && *current_player == p_idx) {
             int hand_idx = packet->payload.req_lipitura.hand_index;
@@ -2717,7 +2813,7 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
             int side = packet->payload.req_lipitura.side;
             if (r >= 0 && r < 2 && c >= 0 && c < 15 && meld_idx >= 0 && meld_idx < table->meld_count) {
                 Tile tile = boards[p_idx][r][c];
-                if (tile.id == -1) return; // Invalid tile
+                if (tile.id == -1) return;
                 if (!players[p_idx].has_melded) {
                     NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
                     alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Trebuie sa te etalezi!");
@@ -2727,12 +2823,11 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
                     alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Nu poti lipi piesa din decartate!");
                     net_send_packet(room->client_sockets[p_idx], &alert_pkt);
                 } else if (tile.number == 0 && table->melds[meld_idx].owner_id != p_idx) {
-                    // Joly nu se poate lipi la formatiile altor jucatori
                     NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
                     alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Joly nu se poate lipi la formatiile altor jucatori!");
                     net_send_packet(room->client_sockets[p_idx], &alert_pkt);
                 } else if (can_attach_tile_to_side(&table->melds[meld_idx], tile, side)) {
-                    extern int calculate_meld_points(Tile tiles[], int count); // from engine.c
+                    extern int calculate_meld_points(Tile tiles[], int count);
                     int old_pts = calculate_meld_points(table->melds[meld_idx].tiles, table->melds[meld_idx].count);
                     
                     if (attach_tile_to_meld_side(table, meld_idx, tile, side, p_idx)) {
@@ -2742,25 +2837,7 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
                         boards[p_idx][r][c].id = -1;
                         boards[p_idx][r][c].number = -1;
                         sync_board_to_player(p_idx, &players[p_idx]);
-                        for (int i = 0; i < room->player_count; i++) {
-                            if (room->client_sockets[i] >= 0) {
-                                NetPacket sync_b; memset(&sync_b, 0, sizeof(NetPacket));
-                                sync_b.type = SYNC_PUBLIC_BOARD; sync_b.payload.sync_board.table = *table;
-                                sync_b.payload.sync_board.discard_count = discard_count;
-                                for (int d = 0; d < discard_count; d++) sync_b.payload.sync_board.discard_pile[d] = discard_pile[d];
-                                sync_b.payload.sync_board.remaining_deck_cards = deck->size;
-                                sync_b.payload.sync_board.atuu_tile = atuu_tile;
-                                sync_b.payload.sync_board.atu_taken = atu_taken;
-                                net_send_packet(room->client_sockets[i], &sync_b);
-
-                                NetPacket sync_h; memset(&sync_h, 0, sizeof(NetPacket));
-                                sync_h.type = SYNC_PRIVATE_HAND; sync_h.sender_id = 0;
-                                sync_h.payload.sync_hand.tile_count = players[i].tile_count;
-                                sync_h.payload.sync_hand.has_melded = players[i].has_melded;
-                                memcpy(sync_h.payload.sync_hand.private_board, boards[i], sizeof(Tile) * 2 * 15);
-                                net_send_packet(room->client_sockets[i], &sync_h);
-                            }
-                        }
+                        server_full_sync(room, *current_player, table, deck, players, boards);
                     }
                 }
             }
@@ -2774,7 +2851,7 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
             int meld_idx = packet->payload.req_replace_joker.table_meld_index;
             if (r >= 0 && r < 2 && c >= 0 && c < 15 && meld_idx >= 0 && meld_idx < table->meld_count) {
                 Tile tile = boards[p_idx][r][c];
-                if (tile.id == -1) return; // Invalid tile
+                if (tile.id == -1) return;
                 if (!players[p_idx].has_melded) {
                     NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
                     alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Trebuie sa te etalezi intai!");
@@ -2797,25 +2874,7 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
                         boards[p_idx][r][c] = joker_tile;
                         players[p_idx].pending_jokers_to_place_face_down++;
                         sync_board_to_player(p_idx, &players[p_idx]);
-                        for (int i = 0; i < room->player_count; i++) {
-                            if (room->client_sockets[i] >= 0) {
-                                NetPacket sync_b; memset(&sync_b, 0, sizeof(NetPacket));
-                                sync_b.type = SYNC_PUBLIC_BOARD; sync_b.payload.sync_board.table = *table;
-                                sync_b.payload.sync_board.discard_count = discard_count;
-                                for (int d = 0; d < discard_count; d++) sync_b.payload.sync_board.discard_pile[d] = discard_pile[d];
-                                sync_b.payload.sync_board.remaining_deck_cards = deck->size;
-                                sync_b.payload.sync_board.atuu_tile = atuu_tile;
-                                sync_b.payload.sync_board.atu_taken = atu_taken;
-                                net_send_packet(room->client_sockets[i], &sync_b);
-
-                                NetPacket sync_h; memset(&sync_h, 0, sizeof(NetPacket));
-                                sync_h.type = SYNC_PRIVATE_HAND; sync_h.sender_id = 0;
-                                sync_h.payload.sync_hand.tile_count = players[i].tile_count;
-                                sync_h.payload.sync_hand.has_melded = players[i].has_melded;
-                                memcpy(sync_h.payload.sync_hand.private_board, boards[i], sizeof(Tile) * 2 * 15);
-                                net_send_packet(room->client_sockets[i], &sync_h);
-                            }
-                        }
+                        server_full_sync(room, *current_player, table, deck, players, boards);
                     } else {
                         NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
                         alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Nu poti inlocui jokerul cu piesa asta!");
@@ -2999,7 +3058,7 @@ round_start:
 
     
     if (g_is_networked && g_room.is_host) {
-        server_broadcast_sync(&g_room, current_player, &table, &deck);
+        server_broadcast_sync(&g_room, current_player, &table, &deck, players);
         
         // Host MUST send SYNC_PRIVATE_HAND to each client so they get their cards!
         for (int i = 1; i < player_count; i++) {
@@ -3054,6 +3113,33 @@ round_start:
             }
         }
 
+        if (g_is_networked && g_room.is_host) {
+            current_state.active_player_id = current_player;
+            if (players[current_player].drew_deck_this_turn || players[current_player].drew_from_discard_this_turn) {
+                current_state.phase = PHASE_PLAY;
+            } else {
+                current_state.phase = PHASE_DRAW;
+            }
+            current_state.discard_count = discard_count;
+            current_state.deck_remaining = deck.size;
+            for(int j=0; j<discard_count; j++) {
+                current_state.discard_pile[j] = discard_pile[j];
+            }
+            current_state.table = table;
+            current_state.atuu_tile = atuu_tile;
+            current_state.atu_taken = atu_taken;
+            current_state.tile_count = players[g_local_player_index].tile_count;
+            current_state.has_melded = players[g_local_player_index].has_melded;
+            for(int r=0; r<2; r++){
+                for(int c=0; c<15; c++){
+                    current_state.private_board[r][c] = boards[g_local_player_index][r][c];
+                }
+            }
+            for (int i = 0; i < g_room.player_count; i++) {
+                current_state.scores[i] = players[i].score;
+            }
+        }
+
         // --- 2. CLIENT POLLING (Both Host and Clients read SYNC packets) ---
         if (g_is_networked) {
             // Un client normal are doar host_socket-ul spre server
@@ -3071,6 +3157,9 @@ round_start:
                     } else if (packet.type == SYNC_GAME_STATE) {
                         current_state.active_player_id = packet.payload.sync_state.active_player_id;
                         current_state.phase = packet.payload.sync_state.current_phase;
+                        for (int i = 0; i < g_room.player_count; i++) {
+                            current_state.scores[i] = packet.payload.sync_state.player_scores[i];
+                        }
                     } else if (packet.type == SYNC_PUBLIC_BOARD) {
                         current_state.discard_count = packet.payload.sync_board.discard_count;
                         current_state.deck_remaining = packet.payload.sync_board.remaining_deck_cards;
@@ -3080,6 +3169,21 @@ round_start:
                         current_state.table = packet.payload.sync_board.table;
                         current_state.atuu_tile = packet.payload.sync_board.atuu_tile;
                         current_state.atu_taken = packet.payload.sync_board.atu_taken;
+                    } else if (packet.type == SYNC_GAME_END) {
+                        for (int i = 0; i < g_room.player_count; i++) {
+                            strcpy(players[i].username, g_room.players[i].username);
+                        }
+                        show_end_game_screen_client(
+                            packet.payload.sync_end.winner_idx,
+                            packet.payload.sync_end.deck_empty,
+                            packet.payload.sync_end.winner_closed_double,
+                            packet.payload.sync_end.final_scores,
+                            packet.payload.sync_end.table_points,
+                            packet.payload.sync_end.hand_penalties,
+                            packet.payload.sync_end.has_atu,
+                            players
+                        );
+                        running = 0;
                     } else if (packet.type == SYNC_MSG_ALERT) {
                         set_error(packet.payload.sync_msg);
                     }
