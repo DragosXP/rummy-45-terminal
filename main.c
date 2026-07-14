@@ -908,13 +908,10 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
         } else {
             meld = &state->table.melds[m];
         }
-        
-        int owner = meld->owner_id;
-        if (owner < 0 || owner >= MAX_PLAYERS) owner = 0;
-        
-        int row_idx = player_meld_counts[owner]++;
+        int row_idx = m / 4;
+        int col_idx = m % 4;
         int start_r = 2 + row_idx * 3;
-        int start_c = col_starts[owner];
+        int start_c = col_starts[col_idx];
 
         bool is_targeted = (has_board_cursor && cursor_m == m);
         int draw_count = meld->count;
@@ -2366,6 +2363,21 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
                             }
                         }
                     }
+                    
+                    for (int i = 0; i < out_pkt->payload.req_play.count - 1; i++) {
+                        for (int j = i + 1; j < out_pkt->payload.req_play.count; j++) {
+                            int idx1 = out_pkt->payload.req_play.hand_indices[i];
+                            int r1 = idx1 / 15; int c1 = idx1 % 15;
+                            int idx2 = out_pkt->payload.req_play.hand_indices[j];
+                            int r2 = idx2 / 15; int c2 = idx2 % 15;
+                            if (ui->selected_tiles[r1][c1] > ui->selected_tiles[r2][c2]) {
+                                int tmp = out_pkt->payload.req_play.hand_indices[i];
+                                out_pkt->payload.req_play.hand_indices[i] = out_pkt->payload.req_play.hand_indices[j];
+                                out_pkt->payload.req_play.hand_indices[j] = tmp;
+                            }
+                        }
+                    }
+
                     ui->meld_selection_mode = false;
                     for (int r = 0; r < 2; r++) {
                         for (int c = 0; c < 15; c++) ui->selected_tiles[r][c] = 0;
@@ -2629,9 +2641,14 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
                     net_send_packet(room->client_sockets[p_idx], &sync_pkt);
                 }
                 server_broadcast_sync(room, *current_player, table, deck);
-            } else if (global_has_error) {
-                // Eroare declansata (ex: formatie invalida). Trimitem MSG_ALERT inapoi la client
-                if (room->client_sockets[p_idx] >= 0) {
+            } else {
+                if (res == -1) set_error("Selecție invalidă! O formație are <3 piese sau piese invalide.");
+                else if (res == -2) set_error("Prima etalare invalidă! (min. 45 pct și cel puțin o suită sau o terță de 1)");
+                else if (res == -3) set_error("Formație invalidă! Grupurile/suitele trebuie să respecte regulile.");
+                else if (res == -4) set_error("Ai etalat deja în această tură! Trebuie să aștepți tura următoare.");
+                else if (res == -5) set_error("Nu poți etala în prima ta tură! Așteaptă să joace toți jucătorii o dată.");
+
+                if (global_has_error && room->client_sockets[p_idx] >= 0) {
                     NetPacket alert_pkt;
                     memset(&alert_pkt, 0, sizeof(NetPacket));
                     alert_pkt.type = SYNC_MSG_ALERT;
