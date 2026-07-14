@@ -870,30 +870,41 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
         cursor_m = ui_state->cursor_x;
     }
 
-    Meld preview_meld;
+    Meld preview_melds[5];
+    int num_preview_melds = 0;
     bool has_preview = (has_board_cursor && ui_state->meld_selection_mode);
     if (has_preview) {
-        preview_meld.owner_id = state->local_player_id;
-        preview_meld.count = 0;
         for (int r = 0; r < 2; r++) {
-            for (int c = 0; c < 15; c++) {
-                if (ui_state->selected_tiles[r][c] && preview_meld.count < 30) {
-                    Tile t = state->private_board[r][c];
-                    if (t.id != -1) {
-                        preview_meld.tiles[preview_meld.count] = t;
-                        preview_meld.face_down[preview_meld.count] = false;
-                        preview_meld.count++;
+            int c = 0;
+            while (c < 15) {
+                if (ui_state->selected_tiles[r][c] && state->private_board[r][c].id != -1) {
+                    if (num_preview_melds < 5) {
+                        preview_melds[num_preview_melds].owner_id = state->local_player_id;
+                        preview_melds[num_preview_melds].count = 0;
+                        while (c < 15 && ui_state->selected_tiles[r][c] && state->private_board[r][c].id != -1 && preview_melds[num_preview_melds].count < 14) {
+                            preview_melds[num_preview_melds].tiles[preview_melds[num_preview_melds].count] = state->private_board[r][c];
+                            preview_melds[num_preview_melds].face_down[preview_melds[num_preview_melds].count] = false;
+                            preview_melds[num_preview_melds].count++;
+                            c++;
+                        }
+                        num_preview_melds++;
+                    } else {
+                        c++;
                     }
+                } else {
+                    c++;
                 }
             }
         }
     }
-    int total_melds = state->table.meld_count + ((has_preview && preview_meld.count > 0) ? 1 : 0);
+    int total_melds = state->table.meld_count + (has_preview ? num_preview_melds : 0);
 
     for (int m = 0; m < total_melds; m++) {
         const Meld *meld;
-        if (has_preview && preview_meld.count > 0 && m == state->table.meld_count) {
-            meld = &preview_meld;
+        bool is_preview_instance = false;
+        if (has_preview && m >= state->table.meld_count) {
+            meld = &preview_melds[m - state->table.meld_count];
+            is_preview_instance = true;
         } else {
             meld = &state->table.melds[m];
         }
@@ -955,7 +966,11 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
                 Tile tile = meld->tiles[actual_idx];
                 bool is_fd = meld->face_down[actual_idx];
                 
-                if (is_fd) {
+                if (is_preview_instance) {
+                    attron(COLOR_PAIR(border_pair));
+                    printw("  ");
+                    attroff(COLOR_PAIR(border_pair));
+                } else if (is_fd) {
                     attron(COLOR_PAIR(6) | A_DIM);
                     printw("XX");
                     attroff(COLOR_PAIR(6) | A_DIM);
@@ -983,9 +998,11 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
         attroff(COLOR_PAIR(border_pair));
 
         // Draw score below
-        attron(A_BOLD);
-        mvprintw(start_r + 3, start_c, "[%d pct]", score);
-        attroff(A_BOLD);
+        if (!is_preview_instance) {
+            attron(A_BOLD);
+            mvprintw(start_r + 3, start_c, "[%d pct]", score);
+            attroff(A_BOLD);
+        }
     }
 }
 
