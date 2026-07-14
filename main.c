@@ -895,6 +895,12 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
             continue;
         }
 
+        // Calculate score
+        int score = 0;
+        for (int t = 0; t < meld->count; t++) {
+            score += meld->tiles[t].points;
+        }
+
         // Draw top border
         attron(COLOR_PAIR(border_pair));
         mvprintw(start_r, start_c, "┌");
@@ -902,7 +908,7 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
             if (t > 0) printw("┬");
             printw("──");
         }
-        printw("┐");
+        printw("┐ (%dp)", score);
         
         // Draw middle row containing tile values
         mvprintw(start_r + 1, start_c, "│");
@@ -2498,6 +2504,18 @@ main_menu:
             case MENU_CHANGE_ACCOUNT:
                 goto menu_start;
                 
+            case MENU_SINGLEPLAYER: {
+                memset(&g_room, 0, sizeof(RoomState));
+                g_is_networked = false;
+                g_local_player_index = 0;
+                player_count = 1;
+                g_room.is_host = true;
+                g_room.player_count = 1;
+                g_room.players[0].connected = true;
+                strncpy(g_room.players[0].username, g_active_username, 10);
+                break;
+            }
+                
             case MENU_CREATE_ROOM: {
                 memset(&g_room, 0, sizeof(RoomState));
                 bool started = show_create_room_lobby(&g_room, &g_accounts, g_active_username);
@@ -2655,6 +2673,10 @@ round_start:
             current_state.private_board[r][c] = boards[g_local_player_index][r][c];
         }
     }
+    current_state.tile_count = players[g_local_player_index].tile_count;
+    current_state.table = table;
+    current_state.atuu_tile = atuu_tile;
+    current_state.atu_taken = atu_taken;
     
     g_ui_state.cursor_zone = ZONE_HAND;
     g_ui_state.cursor_x = 0;
@@ -2727,40 +2749,28 @@ round_start:
             
             // Daca input-ul a generat un pachet de actiune (ex: am apasat Z ca sa fac Swap)
             if (out_pkt.type != 0) {
-                if (g_is_networked) {
-                    if (g_room.is_host) {
-                        // Host-ul randeaza propriul sau pachet intern, fara sa-l trimita pe socket
-                        server_process_packet(&g_room, &out_pkt, players, boards, &table, &deck, &current_player);
-                        // Apoi imediat se sincronizeaza local pe sine!
-                        for(int r=0; r<2; r++){
-                            for(int c=0; c<15; c++){
-                                current_state.private_board[r][c] = boards[g_local_player_index][r][c];
-                            }
+                if (g_room.is_host) {
+                    // Host-ul (si singleplayer offline) proceseaza pachetul intern, fara sa-l trimita pe socket
+                    server_process_packet(&g_room, &out_pkt, players, boards, &table, &deck, &current_player);
+                    // Apoi imediat se sincronizeaza local pe sine!
+                    for(int r=0; r<2; r++){
+                        for(int c=0; c<15; c++){
+                            current_state.private_board[r][c] = boards[g_local_player_index][r][c];
                         }
-                        current_state.active_player_id = current_player;
-                        current_state.discard_count = discard_count;
-                        current_state.deck_remaining = deck.size;
-                        for(int j=0; j<discard_count; j++) {
-                            current_state.discard_pile[j] = discard_pile[j];
-                        }
-                        current_state.table = table;
-                        current_state.atuu_tile = atuu_tile;
-                        current_state.atu_taken = atu_taken;
-                    } else {
-                        // Clientii expediaza pe socket
-                        net_send_packet(g_room.host_socket, &out_pkt);
                     }
-                } else {
-                    // Offline fallback (Test Optimistic)
-                    if (out_pkt.type == REQ_SWAP_TILES) {
-                        int r1 = out_pkt.payload.req_swap.index1 / 15;
-                        int c1 = out_pkt.payload.req_swap.index1 % 15;
-                        int r2 = out_pkt.payload.req_swap.index2 / 15;
-                        int c2 = out_pkt.payload.req_swap.index2 % 15;
-                        Tile tmp = current_state.private_board[r1][c1];
-                        current_state.private_board[r1][c1] = current_state.private_board[r2][c2];
-                        current_state.private_board[r2][c2] = tmp;
+                    current_state.active_player_id = current_player;
+                    current_state.discard_count = discard_count;
+                    current_state.deck_remaining = deck.size;
+                    for(int j=0; j<discard_count; j++) {
+                        current_state.discard_pile[j] = discard_pile[j];
                     }
+                    current_state.table = table;
+                    current_state.atuu_tile = atuu_tile;
+                    current_state.atu_taken = atu_taken;
+                    current_state.tile_count = players[g_local_player_index].tile_count;
+                } else if (g_is_networked) {
+                    // Clientii expediaza pe socket
+                    net_send_packet(g_room.host_socket, &out_pkt);
                 }
             }
         }

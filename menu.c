@@ -215,12 +215,13 @@ int show_account_selection(AccountFile *af, char *active_username) {
 // Meniu principal
 MenuChoice show_main_menu(const char *active_username, int total_score) {
     const char *options[] = {
+        "Singleplayer (Offline Debug)",
         "Create Room",
         "Join Room",
         "Change / Create Account",
         "Exit"
     };
-    int num_options = 4;
+    int num_options = 5;
     int selected = 0;
     
     timeout(-1);
