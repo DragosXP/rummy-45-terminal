@@ -593,27 +593,18 @@ bool check_initial_meld(Tile tiles[], int count) {
 
 bool check_initial_melds(Meld staged[], int meld_count) {
     int total = 0;
-    bool has_clean_run = false;
+    bool has_run = false;
 
     for (int m = 0; m < meld_count; m++) {
         if (!is_valid_meld(staged[m].tiles, staged[m].count)) return false;
         
         if (is_valid_run(staged[m].tiles, staged[m].count)) {
-            bool has_joker = false;
-            for (int i = 0; i < staged[m].count; i++) {
-                if (staged[m].tiles[i].number == 0) {
-                    has_joker = true;
-                    break;
-                }
-            }
-            if (!has_joker) {
-                has_clean_run = true;
-            }
+            has_run = true;
         }
         
         total += calculate_meld_points(staged[m].tiles, staged[m].count);
     }
-    return (total >= 45 && has_clean_run);
+    return (total >= 45 && has_run);
 }
 
 bool has_player_won(Player *player) {

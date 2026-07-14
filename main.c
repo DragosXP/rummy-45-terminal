@@ -991,10 +991,10 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
                         attroff(COLOR_PAIR(border_pair));
                     } else if (is_fd) {
                         int cp = (tile.number == 0) ? 5 : tile.color + 1;
-                        attron(COLOR_PAIR(cp) | A_DIM);
+                        attron(COLOR_PAIR(cp) | A_BOLD);
                         if (tile.number == 0) printw(":)");
                         else printw("%2d", tile.number);
-                        attroff(COLOR_PAIR(cp) | A_DIM);
+                        attroff(COLOR_PAIR(cp) | A_BOLD);
                     } else {
                         int cp = (tile.number == 0) ? 5 : tile.color + 1;
                         attron(COLOR_PAIR(cp) | A_BOLD);
@@ -2732,7 +2732,13 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
                     alert_pkt.type = SYNC_MSG_ALERT; strcpy(alert_pkt.payload.sync_msg, "Eroare: Joly nu se poate lipi la formatiile altor jucatori!");
                     net_send_packet(room->client_sockets[p_idx], &alert_pkt);
                 } else if (can_attach_tile_to_side(&table->melds[meld_idx], tile, side)) {
+                    extern int calculate_meld_points(Tile tiles[], int count); // from engine.c
+                    int old_pts = calculate_meld_points(table->melds[meld_idx].tiles, table->melds[meld_idx].count);
+                    
                     if (attach_tile_to_meld_side(table, meld_idx, tile, side, p_idx)) {
+                        int new_pts = calculate_meld_points(table->melds[meld_idx].tiles, table->melds[meld_idx].count);
+                        players[p_idx].score += (new_pts - old_pts);
+                        
                         boards[p_idx][r][c].id = -1;
                         boards[p_idx][r][c].number = -1;
                         sync_board_to_player(p_idx, &players[p_idx]);
@@ -4238,7 +4244,11 @@ round_start:
                                     if (g_is_networked && !g_room.is_host) {
                                         client_send_action_struct(ACTION_ATTACH, cursor_c, sel_r, sel_c, attach_side);
                                     } else {
+                                        extern int calculate_meld_points(Tile tiles[], int count);
+                                        int old_pts = calculate_meld_points(table.melds[cursor_c].tiles, table.melds[cursor_c].count);
                                         if (attach_tile_to_meld_side(&table, cursor_c, tile, attach_side, current_player)) {
+                                            int new_pts = calculate_meld_points(table.melds[cursor_c].tiles, table.melds[cursor_c].count);
+                                            active->score += (new_pts - old_pts);
                                             if (tile.number == 0 && active->pending_jokers_to_place_face_down > 0) {
                                                 active->pending_jokers_to_place_face_down--;
                                             }
@@ -4645,8 +4655,11 @@ round_start:
                                         set_error("Joly nu poate fi lipit la formațiile altor jucători!");
                                         continue;
                                     }
+                                    extern int calculate_meld_points(Tile tiles[], int count);
+                                    int old_pts = calculate_meld_points(table.melds[cursor_c].tiles, table.melds[cursor_c].count);
                                     if (attach_tile_to_meld_side(&table, cursor_c, tile, attach_side, current_player)) {
-                                        active->score += tile.points;
+                                        int new_pts = calculate_meld_points(table.melds[cursor_c].tiles, table.melds[cursor_c].count);
+                                        active->score += (new_pts - old_pts);
                                         if (tile.number == 0 && active->pending_jokers_to_place_face_down > 0) {
                                             active->pending_jokers_to_place_face_down--;
                                         }
