@@ -919,6 +919,7 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
         
         int cursor_color = ui_state->meld_selection_mode ? 12 : 7;
         int border_pair = is_targeted ? cursor_color : 6;
+        if (is_preview_instance) border_pair = 12;
         if (start_r > 13) {
             if (start_r == 14) {
                 attron(COLOR_PAIR(border_pair));
@@ -1477,18 +1478,9 @@ int play_selected_meld(int player_idx, Player *player, Table *table) {
     if (staged_count == 0) return -1;
 
     // Validare
-    if (!player->has_melded) {
-        if (global_turn_number <= player_count) {
-            return -5;
-        }
-        if (!check_initial_melds(staged, staged_count)) {
-            return -2;
-        }
-    } else {
-        for (int i = 0; i < staged_count; i++) {
-            if (!is_valid_meld(staged[i].tiles, staged[i].count)) {
-                return -3;
-            }
+    for (int i = 0; i < staged_count; i++) {
+        if (!is_valid_meld(staged[i].tiles, staged[i].count)) {
+            return -3;
         }
     }
 
@@ -2319,7 +2311,17 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
         if (z == ZONE_HAND) {
             if (ui->meld_selection_mode) {
                 if (state->private_board[cy][cx].id != -1) {
-                    ui->selected_tiles[cy][cx] = !ui->selected_tiles[cy][cx];
+                    if (ui->selected_tiles[cy][cx]) {
+                        ui->selected_tiles[cy][cx] = 0;
+                    } else {
+                        int max_sel = 0;
+                        for (int r = 0; r < 2; r++) {
+                            for (int c = 0; c < 15; c++) {
+                                if (ui->selected_tiles[r][c] > max_sel) max_sel = ui->selected_tiles[r][c];
+                            }
+                        }
+                        ui->selected_tiles[cy][cx] = max_sel + 1;
+                    }
                 } else {
                     for (int r = 0; r < 2; r++) {
                         for (int c = 0; c < 15; c++) ui->selected_tiles[r][c] = 0;
