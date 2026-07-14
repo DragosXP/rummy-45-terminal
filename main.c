@@ -2617,6 +2617,67 @@ void handle_server_game_over(RoomState *room, int winner_idx, bool deck_empty, P
                                 final_scores, table_points, hand_penalties, has_atu,
                                 players);
 }
+bool is_tile_in_hand_server(Tile board[2][15], int tile_id) {
+    for (int r = 0; r < 2; r++) {
+        for (int c = 0; c < 15; c++) {
+            if (board[r][c].id == tile_id) return true;
+        }
+    }
+    return false;
+}
+
+bool server_can_use_discard_tile(int p_idx, Tile drawn_tile, Player *player, Table *table, Tile board[2][15]) {
+    bool can_attach = false;
+    if (player->has_melded) {
+        for (int m = 0; m < table->meld_count; m++) {
+            if (can_attach_tile_to_side(&table->melds[m], drawn_tile, 0) ||
+                can_attach_tile_to_side(&table->melds[m], drawn_tile, 1)) {
+                can_attach = true;
+                break;
+            }
+        }
+    }
+
+    Tile hand_tiles[35];
+    int hand_count = 0;
+    for (int r = 0; r < 2; r++) {
+        for (int c = 0; c < 15; c++) {
+            if (board[r][c].id != -1) {
+                hand_tiles[hand_count++] = board[r][c];
+            }
+        }
+    }
+    hand_tiles[hand_count++] = drawn_tile;
+
+    Meld output_melds[10];
+    int meld_cnt = split_unordered_melds(hand_tiles, hand_count, output_melds);
+
+    bool can_meld = false;
+    for (int i = 0; i < meld_cnt; i++) {
+        for (int t = 0; t < output_melds[i].count; t++) {
+            if (output_melds[i].tiles[t].id == drawn_tile.id) {
+                can_meld = true;
+                break;
+            }
+        }
+        if (can_meld) break;
+    }
+
+    if (!player->has_melded) {
+        bool has_run = false;
+        int total_score = 0;
+        for (int i = 0; i < meld_cnt; i++) {
+            if (is_valid_run(output_melds[i].tiles, output_melds[i].count)) {
+                has_run = true;
+            }
+            total_score += calculate_meld_points(output_melds[i].tiles, output_melds[i].count);
+        }
+        return (can_meld && total_score >= 45 && has_run);
+    }
+
+    return (can_attach || can_meld);
+}
+
 // ========== SERVER GATEKEEPER ==========
 void server_process_packet(RoomState *room, NetPacket *packet, Player players[], Tile boards[NET_MAX_PLAYERS][2][15], Table *table, Deck *deck, int *current_player) {
     if (packet->type == REQ_SWAP_TILES) {
@@ -2714,6 +2775,17 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
                         net_send_packet(room->client_sockets[p_idx], &alert_pkt);
                         return;
                     }
+                    if (!server_can_use_discard_tile(p_idx, discard_pile[d_idx], &players[p_idx], table, boards[p_idx])) {
+                        NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
+                        alert_pkt.type = SYNC_MSG_ALERT;
+                        if (!players[p_idx].has_melded) {
+                            strcpy(alert_pkt.payload.sync_msg, "Eroare: Nu poți rupe/lua cartea deoarece nu poți face 45 pct sau nu ai suită!");
+                        } else {
+                            strcpy(alert_pkt.payload.sync_msg, "Eroare: Nu poți lua cartea deoarece nu o poți folosi într-o formație sau lipitură!");
+                        }
+                        net_send_packet(room->client_sockets[p_idx], &alert_pkt);
+                        return;
+                    }
                     int num_tiles_to_take = discard_count - d_idx;
                     for (int i = 0; i < num_tiles_to_take; i++) {
                         Tile t = discard_pile[d_idx + i];
@@ -2740,6 +2812,22 @@ void server_process_packet(RoomState *room, NetPacket *packet, Player players[],
             int idx = packet->payload.req_action.hand_index;
             int r = idx / 15; int c = idx % 15;
             if (boards[p_idx][r][c].id != -1) {
+                if (players[p_idx].drew_from_discard_this_turn) {
+                    if (is_tile_in_hand_server(boards[p_idx], players[p_idx].primary_discard_drawn_tile.id)) {
+                        NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
+                        alert_pkt.type = SYNC_MSG_ALERT;
+                        strcpy(alert_pkt.payload.sync_msg, "Eroare: Trebuie să joci piesa trasă din decartate pe masă!");
+                        net_send_packet(room->client_sockets[p_idx], &alert_pkt);
+                        return;
+                    }
+                    if (!players[p_idx].has_melded) {
+                        NetPacket alert_pkt; memset(&alert_pkt, 0, sizeof(NetPacket));
+                        alert_pkt.type = SYNC_MSG_ALERT;
+                        strcpy(alert_pkt.payload.sync_msg, "Eroare: Trebuie să te etalezi în această tură deoarece ai tras din decartate!");
+                        net_send_packet(room->client_sockets[p_idx], &alert_pkt);
+                        return;
+                    }
+                }
                 discard_tile_from_board(p_idx, &players[p_idx], r, c);
                 
                 if (players[p_idx].tile_count == 0) {

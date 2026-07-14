@@ -90,6 +90,7 @@ void discard_tile(Player *player, int hand_index, Tile discard_pile[], int *disc
 // Validarea formatiilor (Meld validation)
 bool is_valid_group(Tile tiles[], int count);
 bool is_valid_run(Tile tiles[], int count);
+bool can_form_valid_run(Tile tiles[], int count);
 bool is_valid_meld(Tile tiles[], int count);
 int calculate_meld_points(Tile tiles[], int count);
 
