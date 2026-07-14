@@ -607,11 +607,6 @@ void render_frame(const LocalClientState *state, const LocalUIState *ui_state) {
         }
     }
 
-    // Phase 2 Debug Info
-    attron(COLOR_PAIR(6));
-    mvprintw(38, 90, "Net: DUMB CLIENT | ID: %d", state->local_player_id);
-    attroff(COLOR_PAIR(6));
-
     refresh(); // 3. Single double-buffer swap
 }
 

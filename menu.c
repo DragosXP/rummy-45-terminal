@@ -10,12 +10,12 @@
 // Afiseaza titlul jocului in ASCII art
 static void draw_title(int start_row) {
     attron(COLOR_PAIR(7) | A_BOLD);
-    mvprintw(start_row,     10, " ____                                      _  _  ____  ");
-    mvprintw(start_row + 1, 10, "|  _ \\ _   _ _ __ ___  _ __ ___  _   _   | || || ___| ");
-    mvprintw(start_row + 2, 10, "| |_) | | | | '_ ` _ \\| '_ ` _ \\| | | |  | || ||___ \\ ");
-    mvprintw(start_row + 3, 10, "|  _ <| |_| | | | | | | | | | | | |_| |  |__  _|__) |");
-    mvprintw(start_row + 4, 10, "|_| \\_\\\\__,_|_| |_| |_|_| |_| |_|\\__, |     |_||____/ ");
-    mvprintw(start_row + 5, 10, "                                  |___/                ");
+    mvprintw(start_row,     10, "  ____                                  _  _  ____  ");
+    mvprintw(start_row + 1, 10, " |  _ \\ _   _ _ __ ___  _ __ ___  _   _| || || ___| ");
+    mvprintw(start_row + 2, 10, " | |_) | | | | '_ ` _ \\| '_ ` _ \\| | | | || ||___ \\ ");
+    mvprintw(start_row + 3, 10, " |  _ <| |_| | | | | | | | | | | | |_| |__   _|__) |");
+    mvprintw(start_row + 4, 10, " |_| \\_\\\\__,_|_| |_| |_|_| |_| |_|\\__, |  |_||____/ ");
+    mvprintw(start_row + 5, 10, "                                  |___/             ");
     attroff(COLOR_PAIR(7) | A_BOLD);
 }
 
