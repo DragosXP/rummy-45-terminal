@@ -841,7 +841,10 @@ void table_nav_up(int *cc, Table *table) {
 }
 
 void table_nav_down(int *cc, Table *table) {
-    if (*cc == 14 || *cc < 0 || table->meld_count == 0) return;
+    if (*cc == 14 || *cc < 0 || table->meld_count == 0 || *cc >= table->meld_count) {
+        *cc = 14;
+        return;
+    }
     int col = table->melds[*cc].owner_id;
     last_table_column = col;
     for (int i = *cc+1; i < table->meld_count; i++) {
@@ -867,8 +870,33 @@ void draw_shared_table(const LocalClientState *state, const LocalUIState *ui_sta
         cursor_m = ui_state->cursor_x;
     }
 
-    for (int m = 0; m < state->table.meld_count; m++) {
-        const Meld *meld = &state->table.melds[m];
+    Meld preview_meld;
+    bool has_preview = (has_board_cursor && ui_state->meld_selection_mode);
+    if (has_preview) {
+        preview_meld.owner_id = state->local_player_id;
+        preview_meld.count = 0;
+        for (int r = 0; r < 2; r++) {
+            for (int c = 0; c < 15; c++) {
+                if (ui_state->selected_tiles[r][c] && preview_meld.count < 30) {
+                    Tile t = state->private_board[r][c];
+                    if (t.id != -1) {
+                        preview_meld.tiles[preview_meld.count] = t;
+                        preview_meld.face_down[preview_meld.count] = false;
+                        preview_meld.count++;
+                    }
+                }
+            }
+        }
+    }
+    int total_melds = state->table.meld_count + ((has_preview && preview_meld.count > 0) ? 1 : 0);
+
+    for (int m = 0; m < total_melds; m++) {
+        const Meld *meld;
+        if (has_preview && preview_meld.count > 0 && m == state->table.meld_count) {
+            meld = &preview_meld;
+        } else {
+            meld = &state->table.melds[m];
+        }
         
         int owner = meld->owner_id;
         if (owner < 0 || owner >= MAX_PLAYERS) owner = 0;
@@ -2062,6 +2090,7 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
         for (int r = 0; r < 2; r++) {
             for (int c = 0; c < 15; c++) ui->selected_tiles[r][c] = 0;
         }
+        ui->meld_selection_mode = false;
         if (z == ZONE_BOARD || z == ZONE_DISCARD) {
             ui->cursor_zone = ZONE_HAND;
             ui->cursor_x = ui->saved_hand_x;
@@ -2133,12 +2162,29 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
                 }
                 cx = ui->discard_cursor;
             } else if (ui->selecting_discard) {
-                if (state->table.meld_count > 0) {
+                bool has_selected = false;
+                if (ui->meld_selection_mode) {
+                    for (int r = 0; r < 2; r++) {
+                        for (int c = 0; c < 15; c++) {
+                            if (ui->selected_tiles[r][c]) {
+                                has_selected = true;
+                                break;
+                            }
+                        }
+                        if (has_selected) break;
+                    }
+                }
+                
+                if (state->table.meld_count > 0 || has_selected) {
                     ui->selecting_discard = false;
                     ui->cursor_zone = ZONE_BOARD;
                     cy = 0;
-                    cx = ui->saved_board_x;
-                    if (cx == 14) cx = state->table.meld_count > 0 ? state->table.meld_count - 1 : 0;
+                    if (has_selected) {
+                        cx = state->table.meld_count;
+                    } else {
+                        cx = ui->saved_board_x;
+                        if (cx == 14) cx = state->table.meld_count > 0 ? state->table.meld_count - 1 : 0;
+                    }
                 }
             }
         }
@@ -2288,7 +2334,29 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
                 }
             }
         } else if (z == ZONE_BOARD) {
-            if (out_pkt && ui->is_holding) {
+            if (ui->meld_selection_mode) {
+                if (out_pkt) {
+                    memset(out_pkt, 0, sizeof(NetPacket));
+                    out_pkt->type = REQ_PLAY_MELDS;
+                    out_pkt->sender_id = state->local_player_id;
+                    out_pkt->payload.req_play.count = 0;
+                    for (int r = 0; r < 2; r++) {
+                        for (int c = 0; c < 15; c++) {
+                            if (ui->selected_tiles[r][c] && state->private_board[r][c].id != -1) {
+                                if (out_pkt->payload.req_play.count < 20) {
+                                    out_pkt->payload.req_play.hand_indices[out_pkt->payload.req_play.count++] = r * 15 + c;
+                                }
+                            }
+                        }
+                    }
+                    ui->meld_selection_mode = false;
+                    for (int r = 0; r < 2; r++) {
+                        for (int c = 0; c < 15; c++) ui->selected_tiles[r][c] = 0;
+                    }
+                    cx = state->table.meld_count;
+                    ui->attach_side = 0;
+                }
+            } else if (out_pkt && ui->is_holding) {
                 memset(out_pkt, 0, sizeof(NetPacket));
                 out_pkt->type = REQ_ADD_LIPITURA;
                 out_pkt->sender_id = state->local_player_id;
