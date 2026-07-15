@@ -2587,12 +2587,14 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
     }
 
     if (ch == 'c' || ch == 'C') {
-        ui->meld_selection_mode = !ui->meld_selection_mode;
-        ui->is_holding = false;
-        ui->held_r = -1;
-        ui->held_c = -1;
-        for (int r = 0; r < 2; r++) {
-            for (int c = 0; c < 15; c++) ui->selected_tiles[r][c] = 0;
+        if (state->active_player_id == state->local_player_id) {
+            ui->meld_selection_mode = !ui->meld_selection_mode;
+            ui->is_holding = false;
+            ui->held_r = -1;
+            ui->held_c = -1;
+            for (int r = 0; r < 2; r++) {
+                for (int c = 0; c < 15; c++) ui->selected_tiles[r][c] = 0;
+            }
         }
     } else if (ch == 'x' || ch == 'X') {
         if (state->pending_jokers > 0 && out_pkt) {
@@ -2688,14 +2690,16 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
         if (z == ZONE_HAND) {
             if (cy == 1) cy = 0;
             else if (cy == 0) {
-                ui->saved_hand_x = cx;
-                ui->saved_hand_y = 0;
-                ui->cursor_zone = ZONE_DISCARD;
-                ui->select_deck = true;
-                ui->selecting_discard = false;
-                ui->selecting_atu = false;
-                cy = 0;
-                cx = 0;
+                if (state->active_player_id == state->local_player_id) {
+                    ui->saved_hand_x = cx;
+                    ui->saved_hand_y = 0;
+                    ui->cursor_zone = ZONE_DISCARD;
+                    ui->select_deck = true;
+                    ui->selecting_discard = false;
+                    ui->selecting_atu = false;
+                    cy = 0;
+                    cx = 0;
+                }
             }
         } else if (z == ZONE_BOARD) {
             table_nav_up(&cx, (Table*)&state->table);
@@ -2777,7 +2781,7 @@ void handle_client_input(int ch, LocalClientState *state, LocalUIState *ui, NetP
             last_was_d = false;
         } else {
             last_was_d = true;
-            if (z == ZONE_HAND && state->private_board[cy][cx].id != -1) {
+            if (state->active_player_id == state->local_player_id && z == ZONE_HAND && state->private_board[cy][cx].id != -1) {
                 if (out_pkt) {
                     memset(out_pkt, 0, sizeof(NetPacket));
                     out_pkt->type = REQ_DISCARD_TILE;
@@ -4045,9 +4049,14 @@ round_start:
         }
 
         if (current_state.active_player_id != current_state.local_player_id) {
-            g_ui_state.is_holding = false;
-            g_ui_state.held_r = -1;
-            g_ui_state.held_c = -1;
+            if (g_ui_state.cursor_zone != ZONE_HAND) {
+                g_ui_state.cursor_zone = ZONE_HAND;
+                g_ui_state.cursor_x = 0;
+                g_ui_state.cursor_y = 0;
+            }
+            g_ui_state.selecting_discard = false;
+            g_ui_state.select_deck = false;
+            g_ui_state.selecting_atu = false;
             g_ui_state.selected_discard_idx = -1;
             g_ui_state.meld_selection_mode = false;
             for (int r = 0; r < 2; r++) {
