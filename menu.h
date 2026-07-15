@@ -6,10 +6,11 @@
 
 // Rezultatul meniului principal
 typedef enum {
-    MENU_CREATE_ROOM = 0,
-    MENU_JOIN_ROOM = 1,
-    MENU_CHANGE_ACCOUNT = 2,
-    MENU_EXIT = 3
+    MENU_SINGLEPLAYER = 0,
+    MENU_CREATE_ROOM = 1,
+    MENU_JOIN_ROOM = 2,
+    MENU_CHANGE_ACCOUNT = 3,
+    MENU_EXIT = 4
 } MenuChoice;
 
 // Afiseaza ecranul de selectie cont.

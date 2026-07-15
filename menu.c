@@ -10,12 +10,12 @@
 // Afiseaza titlul jocului in ASCII art
 static void draw_title(int start_row) {
     attron(COLOR_PAIR(7) | A_BOLD);
-    mvprintw(start_row,     10, " ____                                      _  _  ____  ");
-    mvprintw(start_row + 1, 10, "|  _ \\ _   _ _ __ ___  _ __ ___  _   _   | || || ___| ");
-    mvprintw(start_row + 2, 10, "| |_) | | | | '_ ` _ \\| '_ ` _ \\| | | |  | || ||___ \\ ");
-    mvprintw(start_row + 3, 10, "|  _ <| |_| | | | | | | | | | | | |_| |  |__  _|__) |");
-    mvprintw(start_row + 4, 10, "|_| \\_\\\\__,_|_| |_| |_|_| |_| |_|\\__, |     |_||____/ ");
-    mvprintw(start_row + 5, 10, "                                  |___/                ");
+    mvprintw(start_row,     10, "  ____                                  _  _  ____  ");
+    mvprintw(start_row + 1, 10, " |  _ \\ _   _ _ __ ___  _ __ ___  _   _| || || ___| ");
+    mvprintw(start_row + 2, 10, " | |_) | | | | '_ ` _ \\| '_ ` _ \\| | | | || ||___ \\ ");
+    mvprintw(start_row + 3, 10, " |  _ <| |_| | | | | | | | | | | | |_| |__   _|__) |");
+    mvprintw(start_row + 4, 10, " |_| \\_\\\\__,_|_| |_| |_|_| |_| |_|\\__, |  |_||____/ ");
+    mvprintw(start_row + 5, 10, "                                  |___/             ");
     attroff(COLOR_PAIR(7) | A_BOLD);
 }
 
@@ -215,12 +215,13 @@ int show_account_selection(AccountFile *af, char *active_username) {
 // Meniu principal
 MenuChoice show_main_menu(const char *active_username, int total_score) {
     const char *options[] = {
+        "Singleplayer (Offline Debug)",
         "Create Room",
         "Join Room",
         "Change / Create Account",
         "Exit"
     };
-    int num_options = 4;
+    int num_options = 5;
     int selected = 0;
     
     timeout(-1);
@@ -365,11 +366,13 @@ bool show_create_room_lobby(RoomState *room, AccountFile *af, const char *host_u
     }
     
     // Generam cod alfanumeric de 6 caractere (litere mari si cifre)
-    const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    for (int i = 0; i < 6; i++) {
-        room->room_code[i] = charset[rand() % 36];
-    }
-    room->room_code[6] = '\0';
+    // srand(time(NULL));
+    // const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    // for (int i = 0; i < 6; i++) {
+    //     room->room_code[i] = charset[rand() % 36];
+    // }
+    // room->room_code[6] = '\0';
+    strcpy(room->room_code, "000000");
 
     // Pornim serverul UDP de discovery pentru acest cod
     start_udp_discovery(room->room_code);
@@ -415,43 +418,46 @@ bool show_create_room_lobby(RoomState *room, AccountFile *af, const char *host_u
         // Verifica mesaje de la clienti
         for (int i = 1; i < NET_MAX_PLAYERS; i++) {
             if (room->client_sockets[i] >= 0 && net_has_data(room->client_sockets[i])) {
-                NetMessageType type;
-                char buffer[NET_BUFFER_SIZE];
-                uint32_t recv_len;
+                NetPacket packet;
+                memset(&packet, 0, sizeof(NetPacket));
                 
-                if (net_receive_message(room->client_sockets[i], &type, buffer, sizeof(buffer), &recv_len)) {
-                    if (type == MSG_JOIN) {
-                        // Client a trimis username + score
-                        char client_username[MAX_USERNAME_LEN + 1] = "";
-                        int client_score = 0;
-                        
-                        if (recv_len >= (uint32_t)(MAX_USERNAME_LEN + 1 + sizeof(int))) {
-                            memcpy(client_username, buffer, MAX_USERNAME_LEN + 1);
-                            memcpy(&client_score, buffer + MAX_USERNAME_LEN + 1, sizeof(int));
-                        }
-                        
+                if (net_receive_packet(room->client_sockets[i], &packet)) {
+                    if (packet.type == REQ_JOIN_GAME) {
                         room->players[i].connected = true;
-                        strncpy(room->players[i].username, client_username, MAX_USERNAME_LEN);
+                        strncpy(room->players[i].username, packet.payload.req_join.username, MAX_USERNAME_LEN);
                         room->players[i].username[MAX_USERNAME_LEN] = '\0';
-                        room->players[i].total_score = client_score;
+                        room->players[i].total_score = packet.payload.req_join.score;
                         room->players[i].player_index = i;
                         room->player_count++;
                         
-                        // Trimite indexul jucatorului
-                        net_send_message(room->client_sockets[i], MSG_YOUR_INDEX, &i, sizeof(int));
-                        
-                        // Broadcast player list la toti
-                        char pl_buf[NET_BUFFER_SIZE];
-                        uint32_t pl_len;
-                        net_serialize_player_list(room, pl_buf, &pl_len);
-                        net_broadcast(room, MSG_PLAYER_LIST, pl_buf, pl_len);
-                    } else if (type == MSG_DISCONNECT) {
-                        // Client deconectat
-                        room->players[i].connected = false;
-                        close(room->client_sockets[i]);
-                        room->client_sockets[i] = -1;
-                        room->player_count--;
+                        // Broadcast SYNC_LOBBY_STATE
+                        NetPacket lobby_pkt;
+                        memset(&lobby_pkt, 0, sizeof(NetPacket));
+                        lobby_pkt.type = SYNC_LOBBY_STATE;
+                        lobby_pkt.payload.sync_lobby.player_count = room->player_count;
+                        lobby_pkt.payload.sync_lobby.countdown = room->countdown;
+                        for (int j = 0; j < NET_MAX_PLAYERS; j++) {
+                            lobby_pkt.payload.sync_lobby.players[j] = room->players[j];
+                        }
+                        net_broadcast_packet(room, &lobby_pkt);
                     }
+                } else {
+                    // Eroare la primire, client deconectat
+                    room->players[i].connected = false;
+                    close(room->client_sockets[i]);
+                    room->client_sockets[i] = -1;
+                    room->player_count--;
+                    
+                    // Broadcast SYNC_LOBBY_STATE dupa deconectare
+                    NetPacket lobby_pkt;
+                    memset(&lobby_pkt, 0, sizeof(NetPacket));
+                    lobby_pkt.type = SYNC_LOBBY_STATE;
+                    lobby_pkt.payload.sync_lobby.player_count = room->player_count;
+                    lobby_pkt.payload.sync_lobby.countdown = room->countdown;
+                    for (int j = 0; j < NET_MAX_PLAYERS; j++) {
+                        lobby_pkt.payload.sync_lobby.players[j] = room->players[j];
+                    }
+                    net_broadcast_packet(room, &lobby_pkt);
                 }
             }
         }
@@ -562,41 +568,29 @@ bool show_join_room(RoomState *room, AccountFile *af, const char *username) {
                 room->client_sockets[i] = -1;
             }
             
-            // Trimite MSG_JOIN cu username + score
-            int acc_idx = find_account(af, username);
-            int score = (acc_idx >= 0) ? af->accounts[acc_idx].total_score : 0;
-            
-            char join_buf[MAX_USERNAME_LEN + 1 + sizeof(int)];
-            memset(join_buf, 0, sizeof(join_buf));
-            strncpy(join_buf, username, MAX_USERNAME_LEN);
-            memcpy(join_buf + MAX_USERNAME_LEN + 1, &score, sizeof(int));
-            
-            net_send_message(sock, MSG_JOIN, join_buf, sizeof(join_buf));
-            
-            // Asteapta raspuns
+            // Asteapta SYNC_JOIN_RESPONSE de la server (handshake)
             halfdelay(2);
             time_t wait_start = time(NULL);
             bool connected = false;
             
             while (time(NULL) - wait_start < 5) {
                 if (net_has_data(sock)) {
-                    NetMessageType type;
-                    char buffer[NET_BUFFER_SIZE];
-                    uint32_t recv_len;
+                    NetPacket resp_pkt;
+                    memset(&resp_pkt, 0, sizeof(NetPacket));
                     
-                    if (net_receive_message(sock, &type, buffer, sizeof(buffer), &recv_len)) {
-                        if (type == MSG_JOIN_ACCEPTED || type == MSG_YOUR_INDEX) {
-                            if (recv_len >= sizeof(int)) {
-                                memcpy(&room->local_player_index, buffer, sizeof(int));
+                    if (net_receive_packet(sock, &resp_pkt)) {
+                        if (resp_pkt.type == SYNC_JOIN_RESPONSE) {
+                            if (resp_pkt.payload.sync_join.accepted) {
+                                room->local_player_index = resp_pkt.payload.sync_join.player_id;
+                                connected = true;
+                            } else {
+                                strcpy(error_msg, resp_pkt.payload.sync_join.reason);
+                                if (error_msg[0] == '\0') strcpy(error_msg, "Camera este plina sau conexiunea respinsa!");
                             }
-                            connected = true;
                             break;
-                        } else if (type == MSG_JOIN_REJECTED) {
-                            curs_set(1);
-                            strcpy(error_msg, "Camera este plina sau conexiunea a fost respinsa!");
-                            net_disconnect(sock);
-                            continue;
                         }
+                    } else {
+                        break; // socket error
                     }
                 }
                 napms(100);
@@ -604,10 +598,23 @@ bool show_join_room(RoomState *room, AccountFile *af, const char *username) {
             
             if (!connected) {
                 curs_set(1);
-                strcpy(error_msg, "Timeout: Nu s-a primit raspuns de la server!");
+                if (error_msg[0] == '\0') strcpy(error_msg, "Timeout: Nu s-a primit raspuns de la server!");
                 net_disconnect(sock);
                 continue;
             }
+            
+            // Daca am fost acceptati, trimitem REQ_JOIN_GAME cu numele si scorul
+            int acc_idx = find_account(af, username);
+            int score = (acc_idx >= 0) ? af->accounts[acc_idx].total_score : 0;
+            
+            NetPacket req_join;
+            memset(&req_join, 0, sizeof(NetPacket));
+            req_join.type = REQ_JOIN_GAME;
+            strncpy(req_join.payload.req_join.username, username, 10);
+            req_join.payload.req_join.username[10] = '\0';
+            req_join.payload.req_join.score = score;
+            
+            net_send_packet(sock, &req_join);
             
             // Am intrat in camera - afisam lobby-ul ca client
             curs_set(0);
@@ -616,6 +623,11 @@ bool show_join_room(RoomState *room, AccountFile *af, const char *username) {
             strncpy(room->players[room->local_player_index].username, username, MAX_USERNAME_LEN);
             room->players[room->local_player_index].total_score = score;
             room->players[room->local_player_index].connected = true;
+            
+            // Setam un timeout pentru ca getch() sa nu blocheze complet bucla
+            // si sa putem citi pachetele de retea asincron
+            halfdelay(2);
+
             
             // Lobby loop ca client
             while (!room->game_started) {
@@ -642,43 +654,47 @@ bool show_join_room(RoomState *room, AccountFile *af, const char *username) {
                 
                 // Verifica mesaje de la server
                 if (net_has_data(sock)) {
-                    NetMessageType type;
-                    char buffer[NET_BUFFER_SIZE];
-                    uint32_t recv_len;
+                    NetPacket packet;
+                    memset(&packet, 0, sizeof(NetPacket));
                     
-                    if (net_receive_message(sock, &type, buffer, sizeof(buffer), &recv_len)) {
-                        if (type == MSG_PLAYER_LIST) {
-                            net_deserialize_player_list(buffer, recv_len, room);
-                        } else if (type == MSG_START_COUNTDOWN) {
-                            // Incepe numaratoarea
-                            room->game_started = true;
-                            show_countdown(room);
-                            return true;
-                        } else if (type == MSG_COUNTDOWN_TICK) {
-                            if (recv_len >= sizeof(int)) {
-                                memcpy(&room->countdown, buffer, sizeof(int));
+                    if (net_receive_packet(sock, &packet)) {
+                        if (packet.type == SYNC_LOBBY_STATE) {
+                            room->player_count = packet.payload.sync_lobby.player_count;
+                            room->countdown = packet.payload.sync_lobby.countdown;
+                            for (int j = 0; j < NET_MAX_PLAYERS; j++) {
+                                room->players[j] = packet.payload.sync_lobby.players[j];
                             }
-                            room->game_started = true;
-                            show_countdown(room);
-                            return true;
-                        } else if (type == MSG_DISCONNECT) {
-                            net_disconnect(sock);
-                            erase();
-                            attron(COLOR_PAIR(3) | A_BOLD);
-                            mvprintw(12, 15, "Host-ul a inchis camera!");
-                            attroff(COLOR_PAIR(3) | A_BOLD);
-                            mvprintw(14, 15, "Apasa orice tasta...");
-                            refresh();
-                            timeout(-1);
-                            getch();
-                            return false;
+                            
+                            // Daca countdown este activ
+                            if (room->countdown > 0) {
+                                room->game_started = true;
+                                refresh(); // Forteaza refresh conform cerintei
+                                show_countdown(room);
+                                return true;
+                            }
+                        } else if (packet.type == SYNC_GAME_STATE) {
+                            if (packet.payload.sync_state.current_phase != PHASE_WAITING) {
+                                room->game_started = true;
+                                return true;
+                            }
                         }
+                    } else {
+                        // Deconectare de la server
+                        net_disconnect(sock);
+                        erase();
+                        attron(COLOR_PAIR(3) | A_BOLD);
+                        mvprintw(12, 15, "Host-ul a inchis camera sau s-a pierdut conexiunea!");
+                        attroff(COLOR_PAIR(3) | A_BOLD);
+                        mvprintw(14, 15, "Apasa orice tasta...");
+                        refresh();
+                        timeout(-1);
+                        getch();
+                        return false;
                     }
                 }
                 
                 int ch = getch();
                 if (ch == 27) { // ESC
-                    net_send_message(sock, MSG_DISCONNECT, NULL, 0);
                     net_disconnect(sock);
                     return false;
                 }
@@ -704,9 +720,18 @@ bool show_join_room(RoomState *room, AccountFile *af, const char *username) {
 void show_countdown(RoomState *room) {
     int countdown = 10;
     
-    // Daca suntem host, trimitem countdown la toti
+    // Daca suntem host, trimitem countdown la toti prin SYNC_LOBBY_STATE
     if (room->is_host) {
-        net_broadcast(room, MSG_START_COUNTDOWN, &countdown, sizeof(int));
+        room->countdown = countdown;
+        NetPacket lobby_pkt;
+        memset(&lobby_pkt, 0, sizeof(NetPacket));
+        lobby_pkt.type = SYNC_LOBBY_STATE;
+        lobby_pkt.payload.sync_lobby.player_count = room->player_count;
+        lobby_pkt.payload.sync_lobby.countdown = room->countdown;
+        for (int j = 0; j < NET_MAX_PLAYERS; j++) {
+            lobby_pkt.payload.sync_lobby.players[j] = room->players[j];
+        }
+        net_broadcast_packet(room, &lobby_pkt);
     }
     
     timeout(-1);
@@ -753,7 +778,16 @@ void show_countdown(RoomState *room) {
         
         // Host trimite tick la toti
         if (room->is_host) {
-            net_broadcast(room, MSG_COUNTDOWN_TICK, &i, sizeof(int));
+            room->countdown = i;
+            NetPacket lobby_pkt;
+            memset(&lobby_pkt, 0, sizeof(NetPacket));
+            lobby_pkt.type = SYNC_LOBBY_STATE;
+            lobby_pkt.payload.sync_lobby.player_count = room->player_count;
+            lobby_pkt.payload.sync_lobby.countdown = room->countdown;
+            for (int j = 0; j < NET_MAX_PLAYERS; j++) {
+                lobby_pkt.payload.sync_lobby.players[j] = room->players[j];
+            }
+            net_broadcast_packet(room, &lobby_pkt);
         }
         
         if (i > 0) {

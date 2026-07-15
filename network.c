@@ -12,6 +12,7 @@
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <poll.h>
+#include <pthread.h>
 
 // Seteaza un socket in mod non-blocking
 static void set_nonblocking(int fd) {
@@ -127,6 +128,53 @@ void net_disconnect(int socket) {
     }
 }
 
+bool net_send_packet(int socket, const NetPacket *packet) {
+    if (socket < 0 || packet == NULL) return false;
+    
+    // Temporar blocking pentru trimitere
+    set_blocking(socket);
+    
+    // Trimitem tot pachetul dintr-o bucata
+    size_t total_size = sizeof(NetPacket);
+    size_t total_sent = 0;
+    const char *data = (const char *)packet;
+    
+    while (total_sent < total_size) {
+        ssize_t sent = send(socket, data + total_sent, total_size - total_sent, MSG_NOSIGNAL);
+        if (sent <= 0) {
+            set_nonblocking(socket);
+            return false;
+        }
+        total_sent += sent;
+    }
+    
+    set_nonblocking(socket);
+    return true;
+}
+
+bool net_receive_packet(int socket, NetPacket *packet) {
+    if (socket < 0 || packet == NULL) return false;
+    
+    size_t total_size = sizeof(NetPacket);
+    
+    // Blocking pentru a consuma exact un pachet intreg (asteapta pana sosesc toti bytes-ii)
+    set_blocking(socket);
+    size_t total_received = 0;
+    char *buf = (char *)packet;
+    
+    while (total_received < total_size) {
+        ssize_t received = recv(socket, buf + total_received, total_size - total_received, 0);
+        if (received <= 0) {
+            set_nonblocking(socket);
+            return false;
+        }
+        total_received += received;
+    }
+    
+    set_nonblocking(socket);
+    return true;
+}
+
 void net_accept_clients(RoomState *room) {
     if (room->host_socket < 0) return;
     
@@ -145,9 +193,15 @@ void net_accept_clients(RoomState *room) {
         }
     }
     
+    NetPacket resp_packet;
+    memset(&resp_packet, 0, sizeof(NetPacket));
+    resp_packet.type = SYNC_JOIN_RESPONSE;
+    
     if (slot == -1 || room->player_count >= NET_MAX_PLAYERS) {
         // Camera plina
-        net_send_message(client_fd, MSG_JOIN_REJECTED, "FULL", 5);
+        resp_packet.payload.sync_join.accepted = false;
+        strcpy(resp_packet.payload.sync_join.reason, "FULL");
+        net_send_packet(client_fd, &resp_packet);
         close(client_fd);
         return;
     }
@@ -155,93 +209,10 @@ void net_accept_clients(RoomState *room) {
     set_nonblocking(client_fd);
     room->client_sockets[slot] = client_fd;
     
-    // Trimitem MSG_JOIN_ACCEPTED cu indexul jucatorului
-    net_send_message(client_fd, MSG_JOIN_ACCEPTED, &slot, sizeof(int));
-}
-
-bool net_send_message(int socket, NetMessageType type, const void *data, uint32_t data_len) {
-    if (socket < 0) return false;
-    
-    NetHeader header;
-    header.type = (uint16_t)type;
-    header.length = data_len;
-    
-    // Temporar blocking pentru trimitere
-    set_blocking(socket);
-    
-    // Trimite header
-    ssize_t sent = send(socket, &header, sizeof(NetHeader), MSG_NOSIGNAL);
-    if (sent != sizeof(NetHeader)) {
-        set_nonblocking(socket);
-        return false;
-    }
-    
-    // Trimite payload
-    if (data_len > 0 && data != NULL) {
-        uint32_t total_sent = 0;
-        while (total_sent < data_len) {
-            sent = send(socket, (const char *)data + total_sent, data_len - total_sent, MSG_NOSIGNAL);
-            if (sent <= 0) {
-                set_nonblocking(socket);
-                return false;
-            }
-            total_sent += sent;
-        }
-    }
-    
-    set_nonblocking(socket);
-    return true;
-}
-
-bool net_receive_message(int socket, NetMessageType *type, void *buffer, uint32_t buffer_size, uint32_t *received_len) {
-    if (socket < 0) return false;
-    
-    NetHeader header;
-    
-    // Citeste header (non-blocking)
-    ssize_t received = recv(socket, &header, sizeof(NetHeader), MSG_PEEK);
-    if (received < (ssize_t)sizeof(NetHeader)) {
-        return false; // Nu sunt suficiente date
-    }
-    
-    // Verifica daca avem tot mesajul disponibil
-    if (header.length > buffer_size) {
-        // Mesajul e prea mare, il consumam si il ignoram
-        recv(socket, &header, sizeof(NetHeader), 0);
-        char discard_buf[1024];
-        uint32_t remaining = header.length;
-        while (remaining > 0) {
-            uint32_t chunk = remaining > 1024 ? 1024 : remaining;
-            ssize_t r = recv(socket, discard_buf, chunk, 0);
-            if (r <= 0) break;
-            remaining -= r;
-        }
-        return false;
-    }
-    
-    // Citeste header-ul propriu-zis (il consuma din buffer)
-    recv(socket, &header, sizeof(NetHeader), 0);
-    *type = (NetMessageType)header.type;
-    *received_len = header.length;
-    
-    // Citeste payload
-    if (header.length > 0) {
-        uint32_t total_received = 0;
-        // Temporar blocking pentru citire completa
-        set_blocking(socket);
-        while (total_received < header.length) {
-            received = recv(socket, (char *)buffer + total_received, 
-                          header.length - total_received, 0);
-            if (received <= 0) {
-                set_nonblocking(socket);
-                return false;
-            }
-            total_received += received;
-        }
-        set_nonblocking(socket);
-    }
-    
-    return true;
+    // Trimitem accept cu indexul jucatorului
+    resp_packet.payload.sync_join.accepted = true;
+    resp_packet.payload.sync_join.player_id = slot;
+    net_send_packet(client_fd, &resp_packet);
 }
 
 bool net_has_data(int socket) {
@@ -254,10 +225,10 @@ bool net_has_data(int socket) {
     return (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN));
 }
 
-void net_broadcast(RoomState *room, NetMessageType type, const void *data, uint32_t data_len) {
+void net_broadcast_packet(RoomState *room, const NetPacket *packet) {
     for (int i = 1; i < NET_MAX_PLAYERS; i++) {
         if (room->players[i].connected && room->client_sockets[i] >= 0) {
-            net_send_message(room->client_sockets[i], type, data, data_len);
+            net_send_packet(room->client_sockets[i], packet);
         }
     }
 }
@@ -266,7 +237,6 @@ void net_close_server(RoomState *room) {
     // Inchide socket-urile clientilor
     for (int i = 1; i < NET_MAX_PLAYERS; i++) {
         if (room->client_sockets[i] >= 0) {
-            net_send_message(room->client_sockets[i], MSG_DISCONNECT, NULL, 0);
             close(room->client_sockets[i]);
             room->client_sockets[i] = -1;
         }
@@ -279,166 +249,7 @@ void net_close_server(RoomState *room) {
     }
 }
 
-// ========== Serializare/Deserializare ==========
-
-void net_serialize_player_list(RoomState *room, void *buffer, uint32_t *len) {
-    char *buf = (char *)buffer;
-    int offset = 0;
-    
-    // Scrie numarul de jucatori
-    memcpy(buf + offset, &room->player_count, sizeof(int));
-    offset += sizeof(int);
-    
-    // Scrie fiecare jucator
-    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
-        memcpy(buf + offset, &room->players[i], sizeof(NetPlayerInfo));
-        offset += sizeof(NetPlayerInfo);
-    }
-    
-    *len = offset;
-}
-
-void net_deserialize_player_list(const void *buffer, uint32_t len, RoomState *room) {
-    (void)len;
-    const char *buf = (const char *)buffer;
-    int offset = 0;
-    
-    memcpy(&room->player_count, buf + offset, sizeof(int));
-    offset += sizeof(int);
-    
-    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
-        memcpy(&room->players[i], buf + offset, sizeof(NetPlayerInfo));
-        offset += sizeof(NetPlayerInfo);
-    }
-}
-
-void net_serialize_game_state(Player players[], int p_count, Table *table,
-                              Deck *deck, Tile dp[], int dc,
-                              int current_player, int turn_number, Tile atuu,
-                              int atu_owner, void *buffer, uint32_t *len) {
-    char *buf = (char *)buffer;
-    int offset = 0;
-    
-    // Metadate joc
-    memcpy(buf + offset, &p_count, sizeof(int)); offset += sizeof(int);
-    memcpy(buf + offset, &current_player, sizeof(int)); offset += sizeof(int);
-    memcpy(buf + offset, &turn_number, sizeof(int)); offset += sizeof(int);
-    memcpy(buf + offset, &atuu, sizeof(Tile)); offset += sizeof(Tile);
-    memcpy(buf + offset, &atu_owner, sizeof(int)); offset += sizeof(int);
-    
-    // Deck (copy entire struct)
-    memcpy(buf + offset, deck, sizeof(Deck)); offset += sizeof(Deck);
-    
-    // Discard pile
-    memcpy(buf + offset, &dc, sizeof(int)); offset += sizeof(int);
-    if (dc > 0) {
-        memcpy(buf + offset, dp, sizeof(Tile) * dc); offset += sizeof(Tile) * dc;
-    }
-    
-    // Table (masa comuna)
-    memcpy(buf + offset, &table->meld_count, sizeof(int)); offset += sizeof(int);
-    for (int i = 0; i < table->meld_count; i++) {
-        memcpy(buf + offset, &table->melds[i], sizeof(Meld)); offset += sizeof(Meld);
-    }
-    
-    // Player info (tile_count, has_melded, score - NU trimitem mana fiecarui jucator!)
-    for (int i = 0; i < p_count; i++) {
-        memcpy(buf + offset, &players[i].tile_count, sizeof(int)); offset += sizeof(int);
-        memcpy(buf + offset, &players[i].has_melded, sizeof(bool)); offset += sizeof(bool);
-        memcpy(buf + offset, &players[i].score, sizeof(int)); offset += sizeof(int);
-        memcpy(buf + offset, &players[i].melded_this_turn, sizeof(bool)); offset += sizeof(bool);
-        memcpy(buf + offset, &players[i].drew_from_discard_this_turn, sizeof(bool)); offset += sizeof(bool);
-        memcpy(buf + offset, &players[i].drew_atu_this_turn, sizeof(bool)); offset += sizeof(bool);
-        memcpy(buf + offset, &players[i].pending_jokers_to_place_face_down, sizeof(int)); offset += sizeof(int);
-    }
-    
-    *len = offset;
-}
-
-void net_deserialize_game_state(const void *buffer, uint32_t len,
-                                Player players[], int *p_count, Table *table,
-                                Deck *deck, Tile dp[], int *dc,
-                                int *current_player, int *turn_number, Tile *atuu,
-                                int *atu_owner) {
-    (void)len;
-    const char *buf = (const char *)buffer;
-    int offset = 0;
-    
-    memcpy(p_count, buf + offset, sizeof(int)); offset += sizeof(int);
-    memcpy(current_player, buf + offset, sizeof(int)); offset += sizeof(int);
-    memcpy(turn_number, buf + offset, sizeof(int)); offset += sizeof(int);
-    memcpy(atuu, buf + offset, sizeof(Tile)); offset += sizeof(Tile);
-    memcpy(atu_owner, buf + offset, sizeof(int)); offset += sizeof(int);
-    
-    memcpy(deck, buf + offset, sizeof(Deck)); offset += sizeof(Deck);
-    
-    memcpy(dc, buf + offset, sizeof(int)); offset += sizeof(int);
-    if (*dc > 0) {
-        memcpy(dp, buf + offset, sizeof(Tile) * (*dc)); offset += sizeof(Tile) * (*dc);
-    }
-    
-    memcpy(&table->meld_count, buf + offset, sizeof(int)); offset += sizeof(int);
-    for (int i = 0; i < table->meld_count; i++) {
-        memcpy(&table->melds[i], buf + offset, sizeof(Meld)); offset += sizeof(Meld);
-    }
-    
-    for (int i = 0; i < *p_count; i++) {
-        memcpy(&players[i].tile_count, buf + offset, sizeof(int)); offset += sizeof(int);
-        memcpy(&players[i].has_melded, buf + offset, sizeof(bool)); offset += sizeof(bool);
-        memcpy(&players[i].score, buf + offset, sizeof(int)); offset += sizeof(int);
-        memcpy(&players[i].melded_this_turn, buf + offset, sizeof(bool)); offset += sizeof(bool);
-        memcpy(&players[i].drew_from_discard_this_turn, buf + offset, sizeof(bool)); offset += sizeof(bool);
-        memcpy(&players[i].drew_atu_this_turn, buf + offset, sizeof(bool)); offset += sizeof(bool);
-        memcpy(&players[i].pending_jokers_to_place_face_down, buf + offset, sizeof(int)); offset += sizeof(int);
-    }
-}
-
-void net_serialize_hand(Player *player, int player_idx, Tile board[2][15],
-                        void *buffer, uint32_t *len) {
-    char *buf = (char *)buffer;
-    int offset = 0;
-    
-    memcpy(buf + offset, &player_idx, sizeof(int)); offset += sizeof(int);
-    memcpy(buf + offset, &player->tile_count, sizeof(int)); offset += sizeof(int);
-    memcpy(buf + offset, &player->has_melded, sizeof(bool)); offset += sizeof(bool);
-    memcpy(buf + offset, &player->score, sizeof(int)); offset += sizeof(int);
-    memcpy(buf + offset, &player->drew_from_discard_this_turn, sizeof(bool)); offset += sizeof(bool);
-    memcpy(buf + offset, &player->drew_atu_this_turn, sizeof(bool)); offset += sizeof(bool);
-    memcpy(buf + offset, &player->melded_this_turn, sizeof(bool)); offset += sizeof(bool);
-    memcpy(buf + offset, &player->pending_jokers_to_place_face_down, sizeof(int)); offset += sizeof(int);
-    
-    // Board tiles (2x15)
-    memcpy(buf + offset, board, sizeof(Tile) * 2 * 15); offset += sizeof(Tile) * 2 * 15;
-    
-    // Hand tiles
-    memcpy(buf + offset, player->hand, sizeof(Tile) * player->tile_count); 
-    offset += sizeof(Tile) * player->tile_count;
-    
-    *len = offset;
-}
-
-void net_deserialize_hand(const void *buffer, uint32_t len,
-                          Player *player, int *player_idx, Tile board[2][15]) {
-    (void)len;
-    const char *buf = (const char *)buffer;
-    int offset = 0;
-    
-    memcpy(player_idx, buf + offset, sizeof(int)); offset += sizeof(int);
-    memcpy(&player->tile_count, buf + offset, sizeof(int)); offset += sizeof(int);
-    memcpy(&player->has_melded, buf + offset, sizeof(bool)); offset += sizeof(bool);
-    memcpy(&player->score, buf + offset, sizeof(int)); offset += sizeof(int);
-    memcpy(&player->drew_from_discard_this_turn, buf + offset, sizeof(bool)); offset += sizeof(bool);
-    memcpy(&player->drew_atu_this_turn, buf + offset, sizeof(bool)); offset += sizeof(bool);
-    memcpy(&player->melded_this_turn, buf + offset, sizeof(bool)); offset += sizeof(bool);
-    memcpy(&player->pending_jokers_to_place_face_down, buf + offset, sizeof(int)); offset += sizeof(int);
-    
-    memcpy(board, buf + offset, sizeof(Tile) * 2 * 15); offset += sizeof(Tile) * 2 * 15;
-    
-    memcpy(player->hand, buf + offset, sizeof(Tile) * player->tile_count);
-}
-
 // ========== UDP Discovery System for 6-Character Room Codes ==========
-#include <pthread.h>
 
 static pthread_t discovery_thread;
 static bool discovery_running = false;
@@ -531,7 +342,7 @@ bool resolve_room_code(const char *code, char *resolved_ip) {
     struct sockaddr_in broadcast_addr;
     memset(&broadcast_addr, 0, sizeof(broadcast_addr));
     broadcast_addr.sin_family = AF_INET;
-    broadcast_addr.sin_addr.s_addr = INADDR_BROADCAST; // 255.255.255.255
+    broadcast_addr.sin_addr.s_addr = INADDR_BROADCAST;
     broadcast_addr.sin_port = htons(7778);
 
     // Try sending broadcast multiple times
@@ -543,7 +354,6 @@ bool resolve_room_code(const char *code, char *resolved_ip) {
         char recv_buf[16];
         ssize_t len = recvfrom(fd, recv_buf, sizeof(recv_buf) - 1, 0, (struct sockaddr *)&from_addr, &addr_len);
         if (len >= 2 && strncmp(recv_buf, "OK", 2) == 0) {
-            // Found it! Convert IP address to string
             inet_ntop(AF_INET, &from_addr.sin_addr, resolved_ip, 16);
             close(fd);
             return true;
@@ -553,4 +363,3 @@ bool resolve_room_code(const char *code, char *resolved_ip) {
     close(fd);
     return false;
 }
-
